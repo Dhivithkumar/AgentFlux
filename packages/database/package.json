@@ -1,0 +1,15 @@
+{
+  "name": "@agent-flux/database",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "scripts": {
+    "generate": "prisma generate --schema=../../prisma/schema.prisma",
+    "push": "prisma db push --schema=../../prisma/schema.prisma"
+  },
+  "dependencies": {
+    "@prisma/client": "5.22.0"
+  },
+  "devDependencies": {
+    "prisma": "5.22.0"
+  }
+}

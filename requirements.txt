@@ -1,0 +1,48 @@
+PROJECT REQUIREMENTS & SETUP INSTRUCTIONS
+=======================================
+
+This is a Node.js monorepo using pnpm and PostgreSQL. It is NOT a Python project, so you do not need to install Python packages via pip. Instead, follow these instructions to set it up on a new laptop.
+
+1. SYSTEM REQUIREMENTS
+----------------------
+- Node.js (v18.x or v20.x recommended)
+- pnpm (install globally via: `npm install -g pnpm`)
+- PostgreSQL database (running locally or remotely)
+- Git
+
+2. INITIAL SETUP
+----------------
+1. Clone the repository to the new laptop.
+2. Open a terminal in the root directory (where this file is located).
+3. Run the following command to install all dependencies:
+   > pnpm install
+
+3. ENVIRONMENT VARIABLES
+------------------------
+You need a `.env` file in the root directory. Copy the sample file:
+   > cp .env.example .env
+
+Open `.env` and configure your database credentials and API secrets. Example:
+   DATABASE_URL="postgresql://user:password@localhost:5432/agent_flux"
+   DIRECT_URL="postgresql://user:password@localhost:5432/agent_flux"
+   JWT_SECRET="your_secure_random_string"
+   JWT_EXPIRES_IN="7d"
+   NEXT_PUBLIC_API_URL="http://localhost:3001/api"
+   PORT=3001
+
+*Note: In production or development, ensure you also copy over any specific Google OAuth or Gemini API keys you added to your current `.env`.*
+
+4. DATABASE INITIALIZATION
+--------------------------
+Once your PostgreSQL server is running and the `.env` file is configured with the correct `DATABASE_URL`:
+1. Push the Prisma schema to the database to create all tables:
+   > pnpm db:push
+2. Generate the Prisma client:
+   > pnpm db:generate
+
+5. RUNNING THE APPLICATION
+--------------------------
+Start both the frontend (Next.js) and the backend (Express/API) servers simultaneously:
+   > pnpm dev
+
+The application should now be accessible in your browser (typically http://localhost:3000), and the API on http://localhost:3001.

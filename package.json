@@ -1,0 +1,28 @@
+{
+  "name": "agent-flux-v2",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel -r run dev",
+    "build": "pnpm --parallel -r run build",
+    "db:generate": "pnpm -F database generate",
+    "db:push": "pnpm -F database push"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "esbuild",
+      "prisma"
+    ]
+  },
+  "devDependencies": {
+    "prisma": "5.22.0"
+  },
+  "dependencies": {
+    "@agent-flux/database": "workspace:*",
+    "@prisma/client": "5.22.0"
+  }
+}

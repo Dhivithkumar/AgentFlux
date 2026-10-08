@@ -1,0 +1,951 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  directUrl  = env("DIRECT_URL")
+  extensions = [vector]
+}
+
+model User {
+  id                 String               @id @default(uuid())
+  name               String
+  email              String               @unique
+  passwordHash       String
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  memberships        Membership[]
+  auditLogs          AuditLog[]
+  oauthStates        OAuthState[]
+  workflowApprovals  WorkflowApproval[]
+  KnowledgeDocument  KnowledgeDocument[]
+  assignedEnquiries  Enquiry[]
+  assignedOrders     Order[]
+  orderStatusChanges OrderStatusHistory[]
+  documentTemplates  DocumentTemplate[]
+}
+
+model Business {
+  id                     String                    @id @default(uuid())
+  name                   String
+  industry               String
+  businessType           String?
+  country                String?
+  timezone               String?
+  currency               String?
+  website                String?
+  description            String?
+  contactInfo            Json?
+  operatingHours         Json?
+  preferences            Json?
+  createdAt              DateTime                  @default(now())
+  updatedAt              DateTime                  @updatedAt
+  memberships            Membership[]
+  integrations           Integration[]
+  auditLogs              AuditLog[]
+  oauthStates            OAuthState[]
+  workflows              Workflow[]
+  KnowledgeBase          KnowledgeBase[]
+  KnowledgeDocument      KnowledgeDocument[]
+  KnowledgeChunk         KnowledgeChunk[]
+  knowledgeSources       KnowledgeSource[]
+  fieldDefinitions       WorkflowFieldDefinition[]
+  customers              Customer[]
+  enquiries              Enquiry[]
+  operationalSheetConfig OperationalSheetConfig?
+  operationalSyncJobs    OperationalSyncJob[]
+  orders                 Order[]
+  quotations             Quotation[]
+  invoices               Invoice[]
+  documentTemplates      DocumentTemplate[]
+  Payment                Payment[]
+}
+
+model WorkflowFieldDefinition {
+  id           String   @id @default(uuid())
+  businessId   String
+  workflowType String // e.g., ENQUIRY_INTAKE
+  fieldKey     String
+  label        String
+  description  String?
+  type         String // TEXT, NUMBER, SELECT, etc.
+  required     Boolean  @default(false)
+  options      Json? // For SELECT/MULTI_SELECT
+  defaultValue Json?
+  validation   Json?
+  displayOrder Int      @default(0)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, workflowType, fieldKey])
+  @@index([businessId])
+  @@index([workflowType])
+}
+
+enum Role {
+  OWNER
+  MEMBER
+}
+
+model Membership {
+  id         String   @id @default(uuid())
+  userId     String
+  businessId String
+  role       Role     @default(MEMBER)
+  createdAt  DateTime @default(now())
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, businessId])
+  @@index([userId])
+  @@index([businessId])
+}
+
+enum IntegrationStatus {
+  CONNECTED
+  DISCONNECTED
+  RECONNECT_REQUIRED
+  ERROR
+}
+
+model Integration {
+  id              String            @id @default(uuid())
+  businessId      String
+  provider        String // e.g., GMAIL, GOOGLE_CALENDAR, GOOGLE_SHEETS, GOOGLE_DRIVE
+  accountId       String // External provider account ID
+  accountEmail    String?
+  displayName     String?
+  status          IntegrationStatus @default(CONNECTED)
+  scopes          String[]
+  metadata        Json?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  lastConnectedAt DateTime?
+  lastVerifiedAt  DateTime?
+
+  business                Business                   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  credential              IntegrationCredential?
+  auditLogs               AuditLog[]
+  workflowBindings        WorkflowConnectorBinding[]
+  operationalSheetConfigs OperationalSheetConfig[]
+
+  @@unique([businessId, provider, accountId])
+  @@index([businessId])
+}
+
+model IntegrationCredential {
+  id                    String    @id @default(uuid())
+  integrationId         String    @unique
+  accessTokenEncrypted  String
+  refreshTokenEncrypted String?
+  expiresAt             DateTime?
+  tokenType             String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id            String   @id @default(uuid())
+  businessId    String
+  userId        String?
+  integrationId String?
+  eventType     String // e.g., CONNECTOR_CONNECTED
+  timestamp     DateTime @default(now())
+
+  business    Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  user        User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  integration Integration? @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+  @@index([integrationId])
+}
+
+model OAuthState {
+  id         String   @id @default(uuid())
+  stateHash  String   @unique
+  userId     String
+  businessId String
+  provider   String
+  scopes     String[]
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([stateHash])
+  @@index([expiresAt])
+}
+
+// ===========================================
+// WORKFLOW ENGINE
+// ===========================================
+
+enum WorkflowStatus {
+  DRAFT
+  READY
+  SIMULATION_REQUIRED
+  PENDING_APPROVAL
+  ACTIVE
+  PAUSED
+  FAILED
+  ARCHIVED
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+model Workflow {
+  id              String         @id @default(uuid())
+  businessId      String
+  templateId      String?
+  name            String
+  category        String?
+  description     String?
+  status          WorkflowStatus @default(DRAFT)
+  config          Json?
+  activeVersionId String?
+  createdBy       String?
+  riskLevel       RiskLevel      @default(LOW)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  business          Business                   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  template          WorkflowTemplate?          @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  versions          WorkflowVersion[]
+  executions        WorkflowExecution[]
+  connectorBindings WorkflowConnectorBinding[]
+  enquiries         Enquiry[]
+  orders            Order[]
+
+  @@index([businessId])
+  @@index([templateId])
+}
+
+model WorkflowVersion {
+  id                   String   @id @default(uuid())
+  workflowId           String
+  versionNumber        Int
+  definition           Json? // Optional representation of the DAG
+  status               String   @default("DRAFT")
+  trigger              Json // Stores trigger config
+  requiredConnectors   String[] // e.g., ["gmail", "google_calendar"]
+  optionalConnectors   String[]
+  requiredCapabilities String[] // e.g., ["EMAIL.READ", "CRM.CREATE_LEAD"]
+  createdBy            String?
+  createdAt            DateTime @default(now())
+
+  workflow          Workflow                   @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  steps             WorkflowStep[]
+  executions        WorkflowExecution[]
+  connectorBindings WorkflowConnectorBinding[]
+
+  @@unique([workflowId, versionNumber])
+}
+
+model WorkflowStep {
+  id                String  @id @default(uuid())
+  workflowVersionId String
+  stepOrder         Int
+  stepId            String // Logical ID used in definitions e.g., "extract_request"
+  name              String?
+  type              String // e.g., "AI_EXTRACT", "CALENDAR_CHECK_AVAILABILITY"
+  config            Json // Step-specific configuration/mapping
+  inputSchema       Json?
+  outputSchema      Json?
+  next              Json? // e.g. ["step_id_2"] or { "YES": "step_id_3", "NO": "step_id_4" }
+  errorHandler      Json?
+  retryPolicy       Json?
+  timeout           Int?
+
+  version        WorkflowVersion         @relation(fields: [workflowVersionId], references: [id], onDelete: Cascade)
+  stepExecutions WorkflowStepExecution[]
+
+  @@index([workflowVersionId])
+}
+
+enum ExecutionStatus {
+  QUEUED
+  PENDING
+  RUNNING
+  WAITING_APPROVAL
+  WAITING
+  RETRYING
+  COMPLETED
+  SUCCESS
+  FAILED
+  CANCELLED
+}
+
+model WorkflowExecution {
+  id                String          @id @default(uuid())
+  workflowId        String
+  workflowVersionId String
+  businessId        String? // Explicit reference as requested
+  triggerType       String?
+  triggerPayload    Json?
+  status            ExecutionStatus @default(QUEUED)
+  idempotencyKey    String?
+  context           Json?
+  startedAt         DateTime        @default(now())
+  completedAt       DateTime?
+  error             String?
+
+  workflow       Workflow                @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  version        WorkflowVersion         @relation(fields: [workflowVersionId], references: [id])
+  stepExecutions WorkflowStepExecution[]
+  approvals      WorkflowApproval[]
+
+  @@unique([businessId, workflowId, idempotencyKey])
+  @@index([workflowId])
+}
+
+model WorkflowStepExecution {
+  id          String          @id @default(uuid())
+  executionId String
+  stepId      String
+  status      ExecutionStatus @default(PENDING)
+  startedAt   DateTime        @default(now())
+  completedAt DateTime?
+  inputData   Json?
+  outputData  Json?
+  error       String?
+
+  execution WorkflowExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  step      WorkflowStep      @relation(fields: [stepId], references: [id])
+
+  @@index([executionId])
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model WorkflowApproval {
+  id             String         @id @default(uuid())
+  executionId    String
+  approverId     String?
+  status         ApprovalStatus @default(PENDING)
+  reason         String?
+  decisionReason String?
+  createdAt      DateTime       @default(now())
+  decidedAt      DateTime?
+
+  execution WorkflowExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  approver  User?             @relation(fields: [approverId], references: [id], onDelete: SetNull)
+
+  @@index([executionId])
+}
+
+model WorkflowTemplate {
+  id                   String    @id @default(uuid())
+  slug                 String    @unique
+  name                 String
+  category             String
+  description          String
+  icon                 String?
+  status               String    @default("AVAILABLE")
+  triggerType          String
+  requiredIntegrations String[]
+  requiredCapabilities String[]  @default([]) // e.g., ["EMAIL.READ", "CRM.SEARCH_CONTACT"]
+  workflowDefinition   Json
+  configurationSchema  Json?
+  riskLevel            RiskLevel @default(LOW)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  workflows Workflow[]
+}
+
+model WorkflowConnectorBinding {
+  id                String @id @default(uuid())
+  workflowId        String
+  workflowVersionId String
+  capability        String // e.g., "EMAIL.SEND", "CRM.CREATE_LEAD"
+  integrationId     String // The actual connected account
+
+  workflow    Workflow        @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  version     WorkflowVersion @relation(fields: [workflowVersionId], references: [id], onDelete: Cascade)
+  integration Integration     @relation(fields: [integrationId], references: [id], onDelete: Restrict)
+
+  @@unique([workflowVersionId, capability])
+  @@index([workflowId])
+  @@index([integrationId])
+}
+
+model KnowledgeBase {
+  id          String   @id @default(uuid())
+  businessId  String
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  business  Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  documents KnowledgeDocument[]
+  chunks    KnowledgeChunk[]
+  sources   KnowledgeSource[]
+
+  @@index([businessId])
+}
+
+enum SourceType {
+  FILE
+  GOOGLE_DRIVE
+  GOOGLE_SHEETS
+  NOTION
+  WEBSITE
+  OTHER
+}
+
+enum SourceStatus {
+  CONNECTED
+  SYNCING
+  INDEXED
+  PARTIALLY_INDEXED
+  FAILED
+  DISCONNECTED
+  PAUSED
+}
+
+model KnowledgeSource {
+  id                 String       @id @default(uuid())
+  businessId         String
+  knowledgeBaseId    String
+  type               SourceType
+  name               String
+  status             SourceStatus @default(CONNECTED)
+  connectorId        String?
+  connectedAccountId String?
+  externalId         String?
+  configuration      Json?
+  lastSyncedAt       DateTime?
+  nextSyncAt         DateTime?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  business      Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  knowledgeBase KnowledgeBase       @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
+  documents     KnowledgeDocument[]
+
+  @@index([businessId])
+  @@index([knowledgeBaseId])
+}
+
+enum DocumentStatus {
+  UPLOADED
+  PROCESSING
+  EXTRACTING
+  CHUNKING
+  EMBEDDING
+  INDEXED
+  PARTIALLY_INDEXED
+  FAILED
+  DELETED
+}
+
+enum KnowledgeType {
+  BUSINESS
+  PRODUCT
+  SERVICE
+  PRICING
+  POLICY
+  PROCESS
+  FAQ
+  CUSTOMER
+  OTHER
+  DOCUMENT_TEMPLATE
+  DOCUMENT_SAMPLE
+}
+
+model KnowledgeDocument {
+  id                 String         @id @default(uuid())
+  knowledgeBaseId    String
+  businessId         String
+  sourceId           String?
+  uploadedBy         String?
+  filename           String
+  mimeType           String
+  fileSize           Int
+  storagePath        String?
+  contentHash        String?
+  externalId         String?
+  externalUrl        String?
+  externalModifiedAt DateTime?
+  status             DocumentStatus @default(UPLOADED)
+  knowledgeType      KnowledgeType  @default(OTHER)
+  errorMessage       String?
+  metadata           Json?
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+  processedAt        DateTime?
+
+  knowledgeBase KnowledgeBase    @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
+  business      Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  user          User?            @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
+  source        KnowledgeSource? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  chunks        KnowledgeChunk[]
+
+  @@index([knowledgeBaseId])
+  @@index([businessId])
+  @@index([sourceId])
+}
+
+model KnowledgeChunk {
+  id              String                      @id @default(uuid())
+  documentId      String
+  knowledgeBaseId String
+  businessId      String
+  chunkIndex      Int
+  content         String
+  embedding       Unsupported("vector(768)")?
+  tokenCount      Int?
+  metadata        Json?
+  createdAt       DateTime                    @default(now())
+
+  document      KnowledgeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  knowledgeBase KnowledgeBase     @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
+  business      Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([documentId])
+  @@index([knowledgeBaseId])
+  @@index([businessId])
+}
+
+// ===========================================
+// ENQUIRY INTAKE (Phase 2)
+// ===========================================
+
+enum CustomerStatus {
+  ACTIVE
+  INACTIVE
+  BLOCKED
+}
+
+model Customer {
+  id         String         @id @default(uuid())
+  businessId String
+  name       String?
+  email      String?
+  phone      String?
+  source     String?
+  externalId String?
+  customData Json?
+  status     CustomerStatus @default(ACTIVE)
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+
+  business   Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  enquiries  Enquiry[]
+  orders     Order[]
+  quotations Quotation[]
+  invoices   Invoice[]
+  Payment    Payment[]
+
+  @@index([businessId])
+  @@index([email])
+  @@index([phone])
+  @@index([externalId])
+}
+
+enum EnquiryStatus {
+  NEW
+  PROCESSING
+  NEEDS_INFORMATION
+  READY
+  IN_PROGRESS
+  RESOLVED
+  CANCELLED
+}
+
+enum EnquiryConfidence {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+model Enquiry {
+  id             String             @id @default(uuid())
+  businessId     String
+  customerId     String
+  workflowId     String?
+  status         EnquiryStatus      @default(NEW)
+  source         String
+  subject        String?
+  rawMessage     String
+  summary        String?
+  structuredData Json?
+  confidence     EnquiryConfidence?
+  assignedTo     String?
+  nextAction     String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  workflow Workflow? @relation(fields: [workflowId], references: [id], onDelete: SetNull)
+  assignee User?     @relation(fields: [assignedTo], references: [id], onDelete: SetNull)
+  order    Order?
+
+  @@index([businessId])
+  @@index([customerId])
+  @@index([status])
+}
+
+// ===========================================
+// OPERATIONAL SYNC (Phase 3)
+// ===========================================
+
+enum SyncStatus {
+  PENDING
+  SYNCING
+  SYNCED
+  FAILED
+  RETRYING
+  DISCONNECTED
+}
+
+model OperationalSheetConfig {
+  id                String     @id @default(uuid())
+  businessId        String     @unique
+  integrationId     String
+  spreadsheetId     String
+  spreadsheetName   String?
+  status            SyncStatus @default(PENDING)
+  worksheetMappings Json?
+  lastSyncedAt      DateTime?
+  errorMessage      String?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  business    Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Restrict)
+
+  @@index([businessId])
+}
+
+enum SyncJobStatus {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  RETRYING
+  FAILED
+}
+
+model OperationalSyncJob {
+  id            String        @id @default(uuid())
+  businessId    String
+  entityType    String
+  entityId      String
+  operation     String
+  status        SyncJobStatus @default(PENDING)
+  attemptCount  Int           @default(0)
+  nextAttemptAt DateTime?
+  lastError     String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  completedAt   DateTime?
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, status])
+  @@index([nextAttemptAt])
+}
+
+// ===========================================
+// ORDER / BOOKING (Phase 4)
+// ===========================================
+
+model Order {
+  id                String  @id @default(uuid())
+  businessId        String
+  customerId        String
+  enquiryId         String? @unique
+  workflowId        String?
+  workflowVersionId String?
+  orderNumber       String
+  status            String  @default("DRAFT")
+  source            String
+  structuredData    Json?
+
+  subtotal    Float?
+  discount    Float?
+  tax         Float?
+  totalAmount Float?
+  currency    String?
+
+  scheduledAt DateTime?
+  dueAt       DateTime?
+  completedAt DateTime?
+
+  assignedTo String?
+  notes      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  enquiry  Enquiry?  @relation(fields: [enquiryId], references: [id], onDelete: SetNull)
+  workflow Workflow? @relation(fields: [workflowId], references: [id], onDelete: SetNull)
+  assignee User?     @relation(fields: [assignedTo], references: [id], onDelete: SetNull)
+
+  statusHistory OrderStatusHistory[]
+  quotations    Quotation[]
+  invoices      Invoice[]
+  Payment       Payment[]
+
+  @@unique([businessId, orderNumber])
+  @@index([businessId])
+  @@index([customerId])
+  @@index([enquiryId])
+  @@index([status])
+}
+
+model OrderStatusHistory {
+  id          String   @id @default(uuid())
+  orderId     String
+  fromStatus  String?
+  toStatus    String
+  reason      String?
+  changedById String?
+  createdAt   DateTime @default(now())
+
+  order     Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  changedBy User? @relation(fields: [changedById], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+}
+
+// ===========================================
+// QUOTATION & INVOICE (Phase 5)
+// ===========================================
+
+enum DocumentType {
+  QUOTATION
+  INVOICE
+}
+
+enum DocumentTemplateStatus {
+  DRAFT
+  NEEDS_CONFIGURATION
+  ACTIVE
+  ARCHIVED
+}
+
+model DocumentTemplate {
+  id             String                 @id @default(uuid())
+  businessId     String
+  documentType   DocumentType
+  name           String
+  version        Int                    @default(1)
+  status         DocumentTemplateStatus @default(DRAFT)
+  templateFileId String?
+  sampleFileId   String?
+  mapping        Json?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+  createdBy      String?
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  user     User?    @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+
+  quotations Quotation[]
+  invoices   Invoice[]
+
+  @@unique([businessId, documentType, version])
+  @@index([businessId])
+}
+
+enum QuotationStatus {
+  DRAFT
+  GENERATED
+  SENT
+  ACCEPTED
+  REJECTED
+  EXPIRED
+  CANCELLED
+}
+
+model Quotation {
+  id         String  @id @default(uuid())
+  businessId String
+  customerId String
+  orderId    String?
+
+  quotationNumber String
+  status          QuotationStatus @default(DRAFT)
+
+  quotationDate DateTime  @default(now())
+  validUntil    DateTime?
+
+  currency String @default("USD")
+
+  subtotal       Float @default(0)
+  discountAmount Float @default(0)
+  taxAmount      Float @default(0)
+  totalAmount    Float @default(0)
+
+  customerSnapshot Json?
+  businessSnapshot Json?
+
+  lineItems Json
+  terms     String?
+  notes     String?
+
+  templateId      String?
+  templateVersion Int?
+
+  generatedDocumentId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  business Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer Customer          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  order    Order?            @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  template DocumentTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  invoices Invoice[]
+
+  @@unique([businessId, quotationNumber])
+  @@index([businessId])
+  @@index([customerId])
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  SENT
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+model Invoice {
+  id          String  @id @default(uuid())
+  businessId  String
+  customerId  String
+  orderId     String?
+  quotationId String?
+
+  invoiceNumber String
+  status        InvoiceStatus @default(DRAFT)
+
+  invoiceDate DateTime  @default(now())
+  dueDate     DateTime?
+
+  currency String @default("USD")
+
+  subtotal          Float @default(0)
+  discountAmount    Float @default(0)
+  taxAmount         Float @default(0)
+  totalAmount       Float @default(0)
+  paidAmount        Float @default(0)
+  outstandingAmount Float @default(0)
+
+  customerSnapshot Json?
+  businessSnapshot Json?
+
+  lineItems Json
+  terms     String?
+  notes     String?
+
+  templateId      String?
+  templateVersion Int?
+
+  generatedDocumentId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  business  Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer  Customer          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  order     Order?            @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  quotation Quotation?        @relation(fields: [quotationId], references: [id], onDelete: SetNull)
+  template  DocumentTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  payments  Payment[]
+
+  @@unique([businessId, invoiceNumber])
+  @@index([businessId])
+  @@index([customerId])
+}
+
+// ===========================================
+// PAYMENTS (Phase 6)
+// ===========================================
+
+enum PaymentStatus {
+  CREATED
+  PENDING
+  AUTHORIZED
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+model Payment {
+  id         String  @id @default(uuid())
+  businessId String
+  invoiceId  String
+  customerId String
+  orderId    String?
+
+  provider          String
+  providerPaymentId String? @unique
+  providerOrderId   String?
+  paymentReference  String?
+
+  amount   Float
+  currency String        @default("USD")
+  status   PaymentStatus @default(CREATED)
+  method   String?
+
+  failureReason String?
+  metadata      Json?
+
+  paidAt    DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  invoice  Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  order    Order?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+  @@index([invoiceId])
+  @@index([customerId])
+}
+
+model PaymentWebhookEvent {
+  id              String    @id @default(uuid())
+  provider        String
+  providerEventId String
+  businessId      String?
+  eventType       String
+  payload         Json
+  processed       Boolean   @default(false)
+  processedAt     DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@unique([provider, providerEventId])
+  @@index([provider])
+}
