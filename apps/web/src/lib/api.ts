@@ -21,7 +21,8 @@ export const apiCall = async (endpoint: string, options: RequestInit = {}) => {
   const data = text ? JSON.parse(text) : null;
 
   if (!response.ok) {
-    throw new Error(data?.error?.message || data?.message || response.statusText || 'An error occurred');
+    const errorMsg = (typeof data?.error === 'string' ? data.error : data?.error?.message) || data?.message || response.statusText || 'An error occurred';
+    throw new Error(errorMsg);
   }
 
   return data;

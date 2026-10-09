@@ -52,6 +52,37 @@ router.patch('/:id', async (req: any, res) => {
   }
 });
 
+router.patch('/:id/customer', async (req: any, res) => {
+  try {
+    const { businessId, id } = req.params;
+    const { billingAddress, phone } = req.body;
+    
+    // Find order to get customerId
+    const { orderService } = require('../services/order/OrderService');
+    const order = await orderService.getOrder(businessId, id);
+    if (!order || !order.customerId) {
+      return res.status(404).json({ error: 'Order or Customer not found' });
+    }
+
+    const { prisma } = require('@agent-flux/database');
+    const customer = await prisma.customer.findUnique({ where: { id: order.customerId } });
+    const customData = customer.customData || {};
+    
+    if (billingAddress) customData.billingAddress = billingAddress;
+    
+    const updatedCustomer = await prisma.customer.update({
+      where: { id: order.customerId },
+      data: { 
+        phone: phone || customer.phone,
+        customData 
+      }
+    });
+
+    res.json({ success: true, customer: updatedCustomer });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
 router.post('/:id/status', async (req: any, res) => {
   try {
     const { businessId, id } = req.params;
@@ -82,7 +113,8 @@ router.post('/:id/generate-invoice', async (req: any, res) => {
     
     res.json({ success: true, invoiceId });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    console.error('[Invoice Generation Error]:', error);
+    res.status(500).json({ error: error?.message || error?.toString() || 'Unknown error' });
   }
 });
 

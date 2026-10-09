@@ -6,6 +6,11 @@ export default function OrderList() {
   const { business } = useOutletContext<any>();
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<'ACTIVE' | 'PAST'>('ACTIVE');
+
+  const activeOrders = orders.filter(o => !['COMPLETED', 'CANCELLED', 'DELIVERED', 'REFUNDED'].includes(o.status));
+  const pastOrders = orders.filter(o => ['COMPLETED', 'CANCELLED', 'DELIVERED', 'REFUNDED'].includes(o.status));
+  const displayOrders = activeTab === 'ACTIVE' ? activeOrders : pastOrders;
 
   useEffect(() => {
     loadOrders();
@@ -27,16 +32,35 @@ export default function OrderList() {
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Orders & Bookings</h1>
-          <p className="text-slate-500 mt-1">Manage active orders and bookings</p>
+          <p className="text-slate-500 mt-1">Manage active and past orders</p>
         </div>
+      </div>
+
+      <div className="flex space-x-4 border-b border-slate-200">
+        <button
+          onClick={() => setActiveTab('ACTIVE')}
+          className={`py-2 px-4 font-medium text-sm border-b-2 transition-colors ${
+            activeTab === 'ACTIVE' ? 'border-primary-600 text-primary-600' : 'border-transparent text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          Active Orders ({activeOrders.length})
+        </button>
+        <button
+          onClick={() => setActiveTab('PAST')}
+          className={`py-2 px-4 font-medium text-sm border-b-2 transition-colors ${
+            activeTab === 'PAST' ? 'border-primary-600 text-primary-600' : 'border-transparent text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          Past Orders ({pastOrders.length})
+        </button>
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
         {loading ? (
           <div className="p-8 text-center text-slate-500">Loading...</div>
-        ) : orders.length === 0 ? (
+        ) : displayOrders.length === 0 ? (
           <div className="p-12 text-center text-slate-500">
-            No orders found. Convert an enquiry to an order to get started.
+            {activeTab === 'ACTIVE' ? 'No active orders found.' : 'No past orders found.'}
           </div>
         ) : (
           <table className="min-w-full divide-y divide-slate-200">
@@ -50,7 +74,7 @@ export default function OrderList() {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-slate-200">
-              {orders.map((order: any) => (
+              {displayOrders.map((order: any) => (
                 <tr key={order.id} className="hover:bg-slate-50 transition-colors">
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="font-medium text-slate-900">{order.orderNumber}</div>
@@ -69,6 +93,30 @@ export default function OrderList() {
                     {order.currency} {order.totalAmount || '—'}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-3">
+                    {order.status === 'PENDING_OWNER_CONFIRMATION' && (
+                      <button
+                        onClick={async () => {
+                          try {
+                            const btn = document.getElementById(`btn-accept-${order.id}`);
+                            if (btn) btn.innerText = 'Accepting...';
+                            await apiCall(`/businesses/${business.id}/orders/${order.id}/status`, {
+                              method: 'POST',
+                              body: JSON.stringify({ status: 'CONFIRMED', reason: 'Owner accepted the order' })
+                            });
+                            alert('Order confirmed!');
+                            loadOrders();
+                          } catch (e: any) {
+                            alert(e.message || 'Failed to confirm order');
+                            const btn = document.getElementById(`btn-accept-${order.id}`);
+                            if (btn) btn.innerText = 'Accept Order';
+                          }
+                        }}
+                        id={`btn-accept-${order.id}`}
+                        className="text-white bg-emerald-600 hover:bg-emerald-700 px-3 py-1 rounded shadow-sm text-xs transition-colors"
+                      >
+                        Accept Order
+                      </button>
+                    )}
                     {order.status === 'CONFIRMED' && (
                       <button
                         onClick={async () => {

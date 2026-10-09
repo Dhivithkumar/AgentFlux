@@ -181,11 +181,39 @@ export default function OrderDetail() {
 
         <div className="space-y-6">
           <div className="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
-            <h3 className="text-sm font-semibold text-slate-900 uppercase tracking-wider mb-4">Customer Details</h3>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-semibold text-slate-900 uppercase tracking-wider">Customer Details</h3>
+              <button
+                onClick={async () => {
+                  const currentAddress = (order.customer?.customData as any)?.billingAddress || '';
+                  const newAddress = window.prompt('Enter Billing Address:', currentAddress);
+                  if (newAddress !== null && newAddress !== currentAddress) {
+                    try {
+                      await apiCall(`/businesses/${business.id}/orders/${id}/customer`, {
+                        method: 'PATCH',
+                        body: JSON.stringify({ billingAddress: newAddress })
+                      });
+                      loadOrder();
+                    } catch (e: any) {
+                      alert(e.message || 'Failed to update customer');
+                    }
+                  }
+                }}
+                className="text-xs text-primary-600 hover:text-primary-700 font-medium"
+              >
+                Edit
+              </button>
+            </div>
             <div className="space-y-3">
               <p className="font-medium text-slate-900">{order.customer?.name}</p>
-              <p className="text-sm text-slate-600 flex items-center gap-2">📞 {order.customer?.phone}</p>
+              <p className="text-sm text-slate-600 flex items-center gap-2">📞 {order.customer?.phone || 'Not provided'}</p>
               <p className="text-sm text-slate-600 flex items-center gap-2">✉️ {order.customer?.email}</p>
+              {(order.customer?.customData as any)?.billingAddress && (
+                <p className="text-sm text-slate-600 flex items-start gap-2">
+                  <span>🏢</span> 
+                  <span className="whitespace-pre-wrap">{(order.customer?.customData as any)?.billingAddress}</span>
+                </p>
+              )}
             </div>
           </div>
 
