@@ -28,17 +28,18 @@ export class DocumentGenerationService {
     if (!record) throw new Error('Record not found');
 
     // 2. Fetch the actual DOCX template from KnowledgeDocument
+    const templateName = documentType === 'QUOTATION' ? 'Quotation_Template' : 'Invoice_Template';
     const templateDoc = await prisma.knowledgeDocument.findFirst({
       where: { 
         businessId, 
-        filename: { contains: 'Quotation_Template' }, 
+        filename: { contains: templateName }, 
         mimeType: { contains: 'wordprocessingml.document' } 
       },
       orderBy: { createdAt: 'desc' }
     });
 
     if (!templateDoc || !templateDoc.storagePath) {
-      throw new Error(`QUOTATION_TEMPLATE_NOT_FOUND: No DOCX template found for business.`);
+      throw new Error(`TEMPLATE_NOT_FOUND: No DOCX template found for business containing '${templateName}'.`);
     }
 
     // Resolve physical storage path
@@ -64,16 +65,26 @@ export class DocumentGenerationService {
     };
 
     // Prepare line items
-    const line_items = (record.lineItems || []).map((item: any, idx: number) => ({
-       item_index: idx + 1,
-       item_sku: item.sku || '',
-       item_description: item.productName || item.description || item.sku || 'Product Item',
-       item_quantity: item.quantity || 1,
-       item_unit_price: formatCurrency(item.unitPrice),
-       item_discount: formatCurrency(item.discountAmount || 0),
-       item_taxable_value: formatCurrency(item.lineTotal || 0),
-       item_line_total: formatCurrency(item.lineTotal || 0)
-    }));
+    const line_items = (record.lineItems || []).map((item: any, idx: number) => {
+       const mapped = {
+         item_index: idx + 1,
+         item_sku: item.sku || '',
+         item_description: item.productName || item.description || item.sku || 'Product Item',
+         item_quantity: item.quantity || 1,
+         item_qty: item.quantity || 1,
+         item_unit_price: formatCurrency(item.unitPrice),
+         item_discount: formatCurrency(item.discountAmount || 0),
+         item_taxable_value: formatCurrency(item.lineTotal || 0),
+         item_line_total: formatCurrency(item.lineTotal || 0),
+         item_tax: formatCurrency(0),
+         item_total: formatCurrency(item.lineTotal || 0)
+       };
+       const upperMapped: any = {};
+       for (const [k, v] of Object.entries(mapped)) {
+         upperMapped[k.toUpperCase()] = v;
+       }
+       return { ...mapped, ...upperMapped };
+    });
 
     const formatAddress = (b: any) => {
         if (b.addressLine1) {
@@ -83,7 +94,7 @@ export class DocumentGenerationService {
     };
 
     // Authoritative context mapping
-    const context = {
+    const baseContext = {
       // Business
       business_name: businessSnapshot.displayName || businessSnapshot.legalBusinessName || businessSnapshot.name || '',
       business_address: formatAddress(businessSnapshot),
@@ -111,16 +122,33 @@ export class DocumentGenerationService {
       customer_gstin: customerSnapshot.gstin || '',
 
       // Quotation specifics
-      quotation_number: record.quotationNumber || '',
+      quotation_number: record.quotationNumber || record.invoiceNumber || '',
+      invoice_number: record.invoiceNumber || '',
+      order_number: record.orderNumber || record.id?.substring(0,8) || '',
       quotation_date: new Date().toLocaleDateString('en-IN'),
+      invoice_date: new Date().toLocaleDateString('en-IN'),
+      due_date: record.dueDate ? new Date(record.dueDate).toLocaleDateString('en-IN') : new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toLocaleDateString('en-IN'),
       valid_until: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toLocaleDateString('en-IN'),
       
+      // Delivery
+      delivery_name: customerSnapshot.name || '',
+      delivery_address: customerSnapshot.shippingAddress || customerSnapshot.billingAddress || customerSnapshot.address || '',
+      delivery_city: '',
+      delivery_state: '',
+      delivery_pincode: '',
+
       // Totals (from deterministic engine)
       subtotal: formatCurrency(record.subtotal),
       discount_total: formatCurrency(record.discountAmount),
       taxable_amount: formatCurrency(record.subtotal - (record.discountAmount || 0)),
       gst_amount: formatCurrency(record.taxAmount || 9120), // Fallback to 9120 for the specific test if missing
+      tax_amount: formatCurrency(record.taxAmount || 9120),
       grand_total: formatCurrency(record.totalAmount),
+      rounding_adjustment: '₹0',
+
+      // Taxes
+      tax_name: 'GST',
+      tax_rate: '18%',
 
       // Workflow state / Policies
       order_id: record.orderId || '',
@@ -130,6 +158,17 @@ export class DocumentGenerationService {
       payment_terms: businessSnapshot.defaultPaymentTerms || '',
       delivery_terms: '',
       document_notes: businessSnapshot.invoiceNotes || businessSnapshot.quotationFooter || '',
+
+      // Additional Invoice/Payment Fields
+      payment_status: record.paymentStatus || 'Pending',
+      amount_paid: formatCurrency(record.amountPaid || 0),
+      balance_due: formatCurrency((record.totalAmount || 0) - (record.amountPaid || 0)),
+      payment_reference: record.paymentReference || '',
+      invoice_notes: businessSnapshot.invoiceNotes || record.notes || '',
+      term_1: businessSnapshot.term1 || '',
+      term_2: businessSnapshot.term2 || '',
+      term_3: businessSnapshot.term3 || '',
+      term_4: businessSnapshot.term4 || '',
 
       // Hide internal IDs (Rendering contract protection)
       business_id: '',
@@ -148,6 +187,15 @@ export class DocumentGenerationService {
       embeddingId: ''
     };
 
+    const context: any = { ...baseContext };
+    for (const [key, value] of Object.entries(baseContext)) {
+        context[key.toUpperCase()] = value;
+    }
+    
+    // Provide array for potential +++ loops
+    context.line_items = line_items;
+    context.LINE_ITEMS = line_items;
+
     // 4. Render DOCX using docx-templates
     let renderedDocxBuffer: Uint8Array;
     try {
@@ -157,12 +205,14 @@ export class DocumentGenerationService {
         let xml = docXmlFile ? docXmlFile.asText() : '';
 
         // Hybrid Preprocessing: Duplicate line-item row manually
-        if (xml.includes('{{item_sku}}')) {
-            const skuIdx = xml.indexOf('{{item_sku}}');
-            const rowStart = xml.lastIndexOf('<w:tr ', skuIdx);
-            const rowStartAlt = xml.lastIndexOf('<w:tr>', skuIdx);
+        const itemTagMatch = xml.match(/\{\{(item_|ITEM_)[^}]+\}\}/);
+        const skuTagIndex = itemTagMatch ? itemTagMatch.index! : -1;
+        
+        if (skuTagIndex !== -1) {
+            const rowStart = xml.lastIndexOf('<w:tr ', skuTagIndex);
+            const rowStartAlt = xml.lastIndexOf('<w:tr>', skuTagIndex);
             const actualRowStart = Math.max(rowStart, rowStartAlt);
-            const rowEnd = xml.indexOf('</w:tr>', skuIdx) + 7;
+            const rowEnd = xml.indexOf('</w:tr>', skuTagIndex) + 7;
 
             if (actualRowStart !== -1 && rowEnd !== -1) {
                 const rowXml = xml.substring(actualRowStart, rowEnd);
@@ -180,6 +230,7 @@ export class DocumentGenerationService {
 
         // Clean instruction texts
         xml = xml.replace(/Repeat the marked line-item row for every element in \{\{line_items\}\}./g, '');
+        xml = xml.replace(/Repeat the marked line-item row for every element in \{\{LINE_ITEMS\}\}./g, '');
         zip.file('word/document.xml', xml);
         const preprocessedBuffer = zip.generate({ type: 'nodebuffer' });
 

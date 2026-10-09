@@ -3,6 +3,9 @@ import { EventBus } from '../eventBus';
 import { DocumentGenerationService } from '../documents/DocumentGenerationService';
 import { getConnectorProvider } from '../../connectors/registry';
 import { randomBytes } from 'crypto';
+import { gmailActions } from '../../connectors/actions/gmail';
+import { google } from 'googleapis';
+import { decrypt, encrypt } from '../encryption';
 
 export class InvoiceService {
   private docGenService: DocumentGenerationService;
@@ -122,7 +125,7 @@ export class InvoiceService {
       invoice = await prisma.invoice.update({
         where: { id: invoice.id },
         data: {
-          status: 'GENERATING',
+          status: 'DRAFT',
           currency: order.currency || 'INR',
           subtotal: subtotal,
           discountAmount: order.discount || 0,
@@ -143,7 +146,7 @@ export class InvoiceService {
           orderId: order.id,
           quotationId: order.quotationId,
           invoiceNumber,
-          status: 'GENERATING',
+          status: 'DRAFT',
           invoiceDate: new Date(),
           dueDate,
           currency: order.currency || 'INR',
@@ -220,7 +223,42 @@ export class InvoiceService {
 
     const pdfBase64 = fs.readFileSync(pdfPath).toString('base64');
 
-    const gmailProvider = getConnectorProvider('GMAIL');
+    const integration = await prisma.integration.findFirst({
+        where: { businessId, provider: 'GMAIL', status: 'CONNECTED' }
+    });
+    if (!integration) throw new Error('Gmail integration not connected');
+
+    const creds = await prisma.integrationCredential.findUnique({ where: { integrationId: integration.id } });
+    if (!creds || !creds.accessTokenEncrypted) throw new Error('Gmail credentials not found');
+
+    let accessToken = decrypt(creds.accessTokenEncrypted);
+
+    if (creds.expiresAt && creds.expiresAt.getTime() < Date.now() + 60000 && creds.refreshTokenEncrypted) {
+         const oauth2Client = new google.auth.OAuth2(
+            process.env.GOOGLE_CLIENT_ID,
+            process.env.GOOGLE_CLIENT_SECRET
+         );
+         oauth2Client.setCredentials({ refresh_token: decrypt(creds.refreshTokenEncrypted) });
+         try {
+             const { credentials } = await oauth2Client.refreshAccessToken();
+             if (credentials.access_token) {
+                 accessToken = credentials.access_token;
+                 await prisma.integrationCredential.update({
+                     where: { id: creds.id },
+                     data: {
+                         accessTokenEncrypted: encrypt(accessToken),
+                         expiresAt: credentials.expiry_date ? new Date(credentials.expiry_date) : null
+                     }
+                 });
+             }
+         } catch(refErr: any) {
+             console.error("[InvoiceService] Token refresh failed:", refErr.message);
+         }
+    }
+
+    const sendEmailAction = gmailActions.find(a => a.id === 'send_email');
+    if (!sendEmailAction) throw new Error('send_email action not found');
+
     const to = invoice.customerSnapshot ? (invoice.customerSnapshot as any).email : invoice.customer?.email;
     const customerName = invoice.customerSnapshot ? (invoice.customerSnapshot as any).name : invoice.customer?.name;
     const businessName = invoice.business?.displayName || invoice.business?.name;
@@ -240,18 +278,21 @@ export class InvoiceService {
     `;
 
     try {
-      await (gmailProvider as any).sendEmail(businessId, {
-        to,
-        subject,
-        bodyHtml: body,
-        attachments: [
-          {
-            filename: `${invoice.invoiceNumber}.pdf`,
-            mimeType: 'application/pdf',
-            dataBase64: pdfBase64
-          }
-        ]
-      });
+      await sendEmailAction.execute(
+        { businessId, workflowId: '', executionId: '', accessToken },
+        {
+          to,
+          subject,
+          body,
+          attachments: [
+            {
+              filename: `${invoice.invoiceNumber}.pdf`,
+              mimeType: 'application/pdf',
+              content: pdfBase64
+            }
+          ]
+        }
+      );
 
       await prisma.invoice.update({
         where: { id: invoice.id },

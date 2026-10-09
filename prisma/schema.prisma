@@ -26,15 +26,11 @@ model User {
   assignedOrders     Order[]
   orderStatusChanges OrderStatusHistory[]
   documentTemplates  DocumentTemplate[]
-  approvalRequests   ApprovalRequest[]
-  approvalDecisions  ApprovalDecision[]
-  reviewedRecommendations ImprovementRecommendation[]
-
 }
 
 model Business {
   id                     String                    @id @default(uuid())
-  name                   String // Acts as businessName
+  name                   String
   industry               String
   businessType           String?
   country                String?
@@ -45,54 +41,6 @@ model Business {
   contactInfo            Json?
   operatingHours         Json?
   preferences            Json?
-
-  // Basic Information Extension
-  legalBusinessName      String?
-  displayName            String?
-  email                  String?
-  phone                  String?
-  alternatePhone         String?
-  supportEmail           String?
-
-  // Business Address
-  addressLine1           String?
-  addressLine2           String?
-  city                   String?
-  state                  String?
-  postalCode             String?
-
-  // Tax & Registration
-  taxRegistrationStatus  String?
-  gstin                  String?
-  pan                    String?
-  defaultTaxRate         Float?
-
-  // Invoice & Documents Settings
-  invoicePrefix          String?
-  quotationPrefix        String?
-  orderPrefix            String?
-  defaultPaymentTerms    String?
-  defaultInvoiceDueDays  Int?
-  invoiceNotes           String?
-  invoiceFooter          String?
-  quotationFooter        String?
-
-  // Payment Details
-  bankName               String?
-  bankAccountName        String?
-  bankAccountNumber      String?
-  bankIfsc               String?
-  bankBranch             String?
-  upiId                  String?
-  paymentInstructions    String?
-
-  // Authorized Signatory
-  authorizedSignatoryName        String?
-  authorizedSignatoryDesignation String?
-  authorizedSignatoryEmail       String?
-  authorizedSignatoryPhone       String?
-  authorizedSignatorySignatureUrl String?
-
   createdAt              DateTime                  @default(now())
   updatedAt              DateTime                  @updatedAt
   memberships            Membership[]
@@ -114,20 +62,6 @@ model Business {
   invoices               Invoice[]
   documentTemplates      DocumentTemplate[]
   Payment                Payment[]
-  roleDefinitions        RoleDefinition[]
-  governancePolicies     GovernancePolicy[]
-  approvalRules          ApprovalRule[]
-  approvalRequests       ApprovalRequest[]
-  approvalDecisions      ApprovalDecision[]
-  agents                 Agent[]
-  agentPermissions       AgentToolPermission[]
-  agentExecutions        AgentExecution[]
-  agentMemories          AgentMemory[]
-  analyticsMetrics       AnalyticsMetric[]
-  analyticsSnapshots     AnalyticsSnapshot[]
-  recommendations        ImprovementRecommendation[]
-  experiments            Experiment[]
-
 }
 
 model WorkflowFieldDefinition {
@@ -160,16 +94,14 @@ enum Role {
 }
 
 model Membership {
-  id           String   @id @default(uuid())
-  userId       String
-  businessId   String
-  role         Role     @default(MEMBER)
-  customRoleId String?
-  createdAt    DateTime @default(now())
+  id         String   @id @default(uuid())
+  userId     String
+  businessId String
+  role       Role     @default(MEMBER)
+  createdAt  DateTime @default(now())
 
-  user       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  business   Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  customRole RoleDefinition? @relation(fields: [customRoleId], references: [id], onDelete: SetNull)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
 
   @@unique([userId, businessId])
   @@index([userId])
@@ -228,11 +160,6 @@ model AuditLog {
   integrationId String?
   eventType     String // e.g., CONNECTOR_CONNECTED
   timestamp     DateTime @default(now())
-  resourceType  String?
-  resourceId    String?
-  before        Json?
-  after         Json?
-  metadata      Json?
 
   business    Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
   user        User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
@@ -586,7 +513,7 @@ model KnowledgeChunk {
   businessId      String
   chunkIndex      Int
   content         String
-  embedding       Unsupported("vector(3072)")?
+  embedding       Unsupported("vector(768)")?
   tokenCount      Int?
   metadata        Json?
   createdAt       DateTime                    @default(now())
@@ -738,4 +665,287 @@ model OperationalSyncJob {
 
   @@index([businessId, status])
   @@index([nextAttemptAt])
+}
+
+// ===========================================
+// ORDER / BOOKING (Phase 4)
+// ===========================================
+
+model Order {
+  id                String  @id @default(uuid())
+  businessId        String
+  customerId        String
+  enquiryId         String? @unique
+  workflowId        String?
+  workflowVersionId String?
+  orderNumber       String
+  status            String  @default("DRAFT")
+  source            String
+  structuredData    Json?
+
+  subtotal    Float?
+  discount    Float?
+  tax         Float?
+  totalAmount Float?
+  currency    String?
+
+  scheduledAt DateTime?
+  dueAt       DateTime?
+  completedAt DateTime?
+
+  assignedTo String?
+  notes      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  enquiry  Enquiry?  @relation(fields: [enquiryId], references: [id], onDelete: SetNull)
+  workflow Workflow? @relation(fields: [workflowId], references: [id], onDelete: SetNull)
+  assignee User?     @relation(fields: [assignedTo], references: [id], onDelete: SetNull)
+
+  statusHistory OrderStatusHistory[]
+  quotations    Quotation[]
+  invoices      Invoice[]
+  Payment       Payment[]
+
+  @@unique([businessId, orderNumber])
+  @@index([businessId])
+  @@index([customerId])
+  @@index([enquiryId])
+  @@index([status])
+}
+
+model OrderStatusHistory {
+  id          String   @id @default(uuid())
+  orderId     String
+  fromStatus  String?
+  toStatus    String
+  reason      String?
+  changedById String?
+  createdAt   DateTime @default(now())
+
+  order     Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  changedBy User? @relation(fields: [changedById], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+}
+
+// ===========================================
+// QUOTATION & INVOICE (Phase 5)
+// ===========================================
+
+enum DocumentType {
+  QUOTATION
+  INVOICE
+}
+
+enum DocumentTemplateStatus {
+  DRAFT
+  NEEDS_CONFIGURATION
+  ACTIVE
+  ARCHIVED
+}
+
+model DocumentTemplate {
+  id             String                 @id @default(uuid())
+  businessId     String
+  documentType   DocumentType
+  name           String
+  version        Int                    @default(1)
+  status         DocumentTemplateStatus @default(DRAFT)
+  templateFileId String?
+  sampleFileId   String?
+  mapping        Json?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+  createdBy      String?
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  user     User?    @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+
+  quotations Quotation[]
+  invoices   Invoice[]
+
+  @@unique([businessId, documentType, version])
+  @@index([businessId])
+}
+
+enum QuotationStatus {
+  DRAFT
+  GENERATED
+  SENT
+  ACCEPTED
+  REJECTED
+  EXPIRED
+  CANCELLED
+}
+
+model Quotation {
+  id         String  @id @default(uuid())
+  businessId String
+  customerId String
+  orderId    String?
+
+  quotationNumber String
+  status          QuotationStatus @default(DRAFT)
+
+  quotationDate DateTime  @default(now())
+  validUntil    DateTime?
+
+  currency String @default("USD")
+
+  subtotal       Float @default(0)
+  discountAmount Float @default(0)
+  taxAmount      Float @default(0)
+  totalAmount    Float @default(0)
+
+  customerSnapshot Json?
+  businessSnapshot Json?
+
+  lineItems Json
+  terms     String?
+  notes     String?
+
+  templateId      String?
+  templateVersion Int?
+
+  generatedDocumentId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  business Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer Customer          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  order    Order?            @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  template DocumentTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  invoices Invoice[]
+
+  @@unique([businessId, quotationNumber])
+  @@index([businessId])
+  @@index([customerId])
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  SENT
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+model Invoice {
+  id          String  @id @default(uuid())
+  businessId  String
+  customerId  String
+  orderId     String?
+  quotationId String?
+
+  invoiceNumber String
+  status        InvoiceStatus @default(DRAFT)
+
+  invoiceDate DateTime  @default(now())
+  dueDate     DateTime?
+
+  currency String @default("USD")
+
+  subtotal          Float @default(0)
+  discountAmount    Float @default(0)
+  taxAmount         Float @default(0)
+  totalAmount       Float @default(0)
+  paidAmount        Float @default(0)
+  outstandingAmount Float @default(0)
+
+  customerSnapshot Json?
+  businessSnapshot Json?
+
+  lineItems Json
+  terms     String?
+  notes     String?
+
+  templateId      String?
+  templateVersion Int?
+
+  generatedDocumentId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  business  Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer  Customer          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  order     Order?            @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  quotation Quotation?        @relation(fields: [quotationId], references: [id], onDelete: SetNull)
+  template  DocumentTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  payments  Payment[]
+
+  @@unique([businessId, invoiceNumber])
+  @@index([businessId])
+  @@index([customerId])
+}
+
+// ===========================================
+// PAYMENTS (Phase 6)
+// ===========================================
+
+enum PaymentStatus {
+  CREATED
+  PENDING
+  AUTHORIZED
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+model Payment {
+  id         String  @id @default(uuid())
+  businessId String
+  invoiceId  String
+  customerId String
+  orderId    String?
+
+  provider          String
+  providerPaymentId String? @unique
+  providerOrderId   String?
+  paymentReference  String?
+
+  amount   Float
+  currency String        @default("USD")
+  status   PaymentStatus @default(CREATED)
+  method   String?
+
+  failureReason String?
+  metadata      Json?
+
+  paidAt    DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  invoice  Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  order    Order?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+  @@index([invoiceId])
+  @@index([customerId])
+}
+
+model PaymentWebhookEvent {
+  id              String    @id @default(uuid())
+  provider        String
+  providerEventId String
+  businessId      String?
+  eventType       String
+  payload         Json
+  processed       Boolean   @default(false)
+  processedAt     DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@unique([provider, providerEventId])
+  @@index([provider])
 }
