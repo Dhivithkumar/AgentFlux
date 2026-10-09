@@ -30,7 +30,7 @@ export class EventDispatcher {
              SheetSyncService.syncEntity(businessId, entityMap[eventType], entityId).catch((err: any) => console.error("Sheet sync failed", err));
           }
       }
-      if (eventType === 'ORDER_CREATED' || eventType === 'ORDER_CONFIRMED') {
+      if (eventType === 'ORDER_CONFIRMED' || eventType === 'order.confirmed') {
         const orderId = payload.orderId;
         
         // 1. Check readiness

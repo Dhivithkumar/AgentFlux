@@ -41,7 +41,8 @@ async function runTests() {
                 businessId,
                 name: 'Karthik',
                 email: 'karthik@example.com',
-                phone: '+91 9876543210'
+                phone: '+91 9876543210',
+                customData: { billingAddress: '123 Test Street, Coimbatore' }
             }
         });
     } else {
@@ -59,7 +60,7 @@ async function runTests() {
       data: {
         businessId,
         customerId: customer.id,
-        quotationNumber: `AF-QTN-TEST-${Date.now()}`,
+        quotationNumber: `AF-QTN-${Date.now()}`,
         status: 'SENT',
         currency: 'INR',
         subtotal: 76000,
@@ -99,7 +100,7 @@ async function runTests() {
     
     const missingDataQtn = await prisma.quotation.create({
       data: {
-        businessId, customerId: customer.id, quotationNumber: `AF-QTN-MISS-${Date.now()}`,
+        businessId, customerId: customer.id, quotationNumber: `AF-QTN-${Date.now() + 1}`,
         status: 'SENT', currency: 'INR', subtotal: 100, taxAmount: 12, totalAmount: 112,
         lineItems: JSON.stringify([{ productName: 'Test', quantity: 1, unitPrice: 100 }]),
         validUntil: new Date(Date.now() + 10000000)
@@ -122,7 +123,7 @@ async function runTests() {
     
     const expiredQtn = await prisma.quotation.create({
       data: {
-        businessId, customerId: customer.id, quotationNumber: `AF-QTN-EXP-${Date.now()}`,
+        businessId, customerId: customer.id, quotationNumber: `AF-QTN-${Date.now() + 2}`,
         status: 'EXPIRED', currency: 'INR', subtotal: 100, taxAmount: 12, totalAmount: 112,
         lineItems: JSON.stringify([]),
         validUntil: new Date(Date.now() - 10000000)
@@ -140,7 +141,7 @@ async function runTests() {
     
     const duplicateQtn = await prisma.quotation.create({
       data: {
-        businessId, customerId: customer.id, quotationNumber: `AF-QTN-DUP-${Date.now()}`,
+        businessId, customerId: customer.id, quotationNumber: `AF-QTN-${Date.now() + 3}`,
         status: 'SENT', currency: 'INR', subtotal: 100, taxAmount: 12, totalAmount: 112,
         lineItems: JSON.stringify([{ productName: 'Test', quantity: 1, unitPrice: 100 }]),
         validUntil: new Date(Date.now() + 10000000)
@@ -166,7 +167,7 @@ async function runTests() {
 
     const snapshotQtn = await prisma.quotation.create({
       data: {
-        businessId, customerId: customer.id, quotationNumber: `AF-QTN-SNAP-${Date.now()}`,
+        businessId, customerId: customer.id, quotationNumber: `AF-QTN-${Date.now()}`,
         status: 'SENT', currency: 'INR', subtotal: 38000, taxAmount: 4560, totalAmount: 42560,
         lineItems: JSON.stringify([{ sku: 'SOFA-3S', productName: 'Modern 3-Seater Sofa', quantity: 1, unitPrice: 38000 }]),
         validUntil: new Date(Date.now() + 10000000)

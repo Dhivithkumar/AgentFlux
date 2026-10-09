@@ -68,7 +68,28 @@ export default function OrderList() {
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-700">
                     {order.currency} {order.totalAmount || '—'}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-3">
+                    {order.status === 'CONFIRMED' && (
+                      <button
+                        onClick={async () => {
+                          try {
+                            const btn = document.getElementById(`btn-inv-${order.id}`);
+                            if (btn) btn.innerText = 'Generating...';
+                            await apiCall(`/businesses/${business.id}/orders/${order.id}/generate-invoice`, 'POST');
+                            alert('Invoice generated and sent to customer!');
+                            loadOrders();
+                          } catch (e: any) {
+                            alert(e.message || 'Failed to generate invoice');
+                            const btn = document.getElementById(`btn-inv-${order.id}`);
+                            if (btn) btn.innerText = 'Generate Invoice';
+                          }
+                        }}
+                        id={`btn-inv-${order.id}`}
+                        className="text-white bg-primary-600 hover:bg-primary-700 px-3 py-1 rounded shadow-sm text-xs transition-colors"
+                      >
+                        Generate Invoice
+                      </button>
+                    )}
                     <Link to={`/dashboard/orders/${order.id}`} className="text-primary-600 hover:text-primary-900">
                       View
                     </Link>

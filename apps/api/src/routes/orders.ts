@@ -69,4 +69,21 @@ router.post('/:id/status', async (req: any, res) => {
   }
 });
 
+router.post('/:id/generate-invoice', async (req: any, res) => {
+  try {
+    const { businessId, id } = req.params;
+    const { invoiceService } = require('../services/invoice/InvoiceService');
+    
+    // Generate Invoice (PDF generation included)
+    const invoiceId = await invoiceService.generateInvoice(businessId, id);
+    
+    // Send Invoice to customer automatically
+    await invoiceService.sendInvoice(businessId, invoiceId);
+    
+    res.json({ success: true, invoiceId });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;

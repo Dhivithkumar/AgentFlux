@@ -113,7 +113,7 @@ export class OrderService {
           });
 
           return newOrder;
-        });
+        }, { timeout: 15000, maxWait: 10000 });
         break;
       } catch (err: any) {
         if (err.message === 'QUOTATION_ALREADY_PROCESSED') {
@@ -390,20 +390,8 @@ Aasha Furniture Team`;
       return updated;
     });
 
-    // Operational Sync
+    // Operational Sync for the status update
     operationalSyncPoller.enqueue(businessId, 'ORDER', updatedOrder.id, 'STATUS_UPDATE').catch(console.error);
-
-    // Trigger Invoice Generation Pipeline explicitly if owner confirmed
-    if (newStatus === 'CONFIRMED' && order.status === 'PENDING_OWNER_CONFIRMATION') {
-        const { invoiceService } = require('../invoice/InvoiceService');
-        try {
-            const invoiceId = await invoiceService.generateInvoice(businessId, updatedOrder.id);
-            // Optionally auto-send or rely on another trigger. We'll auto-send since it's confirmed.
-            invoiceService.sendInvoice(businessId, invoiceId).catch(console.error);
-        } catch (e) {
-            console.error('[OrderService] Failed to generate/send invoice upon confirmation:', e);
-        }
-    }
 
     return updatedOrder;
   }

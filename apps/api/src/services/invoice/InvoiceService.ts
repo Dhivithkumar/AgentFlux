@@ -36,7 +36,10 @@ export class InvoiceService {
 
     // Customer checks
     const customer = order.customer;
-    if (!customer.name || !customer.email || !order.billingAddress) {
+    const customerData = customer.customData as any || {};
+    const billingAddress = (order as any).billingAddress || customerData.billingAddress;
+    
+    if (!customer.name || !customer.email || !billingAddress) {
       return { status: 'CUSTOMER_INFORMATION_REQUIRED', message: 'Customer name, email, or billing address is missing', missingFields: ['billingAddress'] };
     }
 
@@ -72,23 +75,28 @@ export class InvoiceService {
     const business = await prisma.business.findUnique({ where: { id: businessId } });
 
     // Financial Validation Engine (Deterministic)
-    let subtotal = 0;
-    const taxRate = business?.defaultTaxRate || 0;
+    let calculatedSubtotal = 0;
     
     // Validate that order snapshot totals are correct
     const items = order.items || [];
     for (const item of items) {
       const lineSub = (item.quantity * item.unitPrice) - (item.discount || 0);
-      subtotal += lineSub;
+      calculatedSubtotal += lineSub;
     }
     
-    const taxAmount = subtotal * (taxRate / 100);
-    const grandTotal = subtotal + taxAmount;
+    if (Math.abs((order.subtotal || 0) - calculatedSubtotal) > 1) {
+       throw new Error(`FINANCIAL_VALIDATION_FAILED: Order subtotal (${order.subtotal}) does not match calculated line items subtotal (${calculatedSubtotal}).`);
+    }
+
+    const grandTotal = (order.subtotal || 0) - (order.discount || 0) + (order.tax || 0);
 
     // Check against Order's accepted amounts (allowing 1 rupee/cent rounding difference)
     if (Math.abs((order.totalAmount || 0) - grandTotal) > 1) {
-       throw new Error('FINANCIAL_VALIDATION_FAILED: Order total does not match calculated total from line items and current tax rate.');
+       throw new Error(`FINANCIAL_VALIDATION_FAILED: Order total (${order.totalAmount}) does not match calculated grand total (${grandTotal}).`);
     }
+
+    const subtotal = order.subtotal || 0;
+    const taxAmount = order.tax || 0;
 
     // Generate Invoice Number
     const count = await prisma.invoice.count({ where: { businessId } });
@@ -100,28 +108,56 @@ export class InvoiceService {
     const dueDate = new Date();
     dueDate.setDate(dueDate.getDate() + dueDays);
 
-    // Create Invoice Record
-    const invoice = await prisma.invoice.create({
-      data: {
-        businessId,
-        customerId: order.customerId,
-        orderId: order.id,
-        quotationId: order.quotationId,
-        invoiceNumber,
-        status: 'GENERATING',
-        invoiceDate: new Date(),
-        dueDate,
-        currency: order.currency || 'INR',
-        subtotal: subtotal,
-        discountAmount: order.discount || 0,
-        taxAmount: taxAmount,
-        totalAmount: grandTotal,
-        outstandingAmount: grandTotal,
-        lineItems: JSON.parse(JSON.stringify(order.items)), // Snapshot
-        customerSnapshot: JSON.parse(JSON.stringify(order.customer)), // Snapshot
-        businessSnapshot: JSON.parse(JSON.stringify(business)) // Snapshot
-      }
+    // Idempotency: Check if an invoice already exists for this order
+    let invoice = await prisma.invoice.findFirst({
+      where: { businessId, orderId }
     });
+
+    if (invoice) {
+      if (invoice.status === 'GENERATED' || invoice.status === 'SENT' || invoice.status === 'PAYMENT_PENDING' || invoice.status === 'PAID') {
+        console.log(`[InvoiceService] Idempotent trigger: Invoice ${invoice.id} already exists and is valid for order ${orderId}`);
+        return invoice.id;
+      }
+      // If it exists but failed PDF generation (e.g., DRAFT), we will update it.
+      invoice = await prisma.invoice.update({
+        where: { id: invoice.id },
+        data: {
+          status: 'GENERATING',
+          currency: order.currency || 'INR',
+          subtotal: subtotal,
+          discountAmount: order.discount || 0,
+          taxAmount: taxAmount,
+          totalAmount: grandTotal,
+          outstandingAmount: grandTotal,
+          lineItems: JSON.parse(JSON.stringify(order.items)),
+          customerSnapshot: JSON.parse(JSON.stringify(order.customer)),
+          businessSnapshot: JSON.parse(JSON.stringify(business))
+        }
+      });
+    } else {
+      // Create Invoice Record
+      invoice = await prisma.invoice.create({
+        data: {
+          businessId,
+          customerId: order.customerId,
+          orderId: order.id,
+          quotationId: order.quotationId,
+          invoiceNumber,
+          status: 'GENERATING',
+          invoiceDate: new Date(),
+          dueDate,
+          currency: order.currency || 'INR',
+          subtotal: subtotal,
+          discountAmount: order.discount || 0,
+          taxAmount: taxAmount,
+          totalAmount: grandTotal,
+          outstandingAmount: grandTotal,
+          lineItems: JSON.parse(JSON.stringify(order.items)), // Snapshot
+          customerSnapshot: JSON.parse(JSON.stringify(order.customer)), // Snapshot
+          businessSnapshot: JSON.parse(JSON.stringify(business)) // Snapshot
+        }
+      });
+    }
 
     // Generate PDF Document
     try {

@@ -61,7 +61,13 @@ class OperationalSyncPoller {
       } else if (job.entityType === 'CUSTOMER') {
         await operationalSyncService.syncCustomer(job.businessId, job.entityId);
       } else if (job.entityType === 'ORDER') {
-        await operationalSyncService.syncOrder(job.businessId, job.entityId);
+        if (job.operation.startsWith('DISPATCH_EVENT:')) {
+          const eventType = job.operation.split(':')[1];
+          const { EventBus } = require('../../services/eventBus');
+          await EventBus.publish(job.businessId, eventType, { orderId: job.entityId });
+        } else {
+          await operationalSyncService.syncOrder(job.businessId, job.entityId);
+        }
       } else if (job.entityType === 'INVOICE') {
         await operationalSyncService.syncInvoice(job.businessId, job.entityId);
       } else {
