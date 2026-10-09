@@ -75,7 +75,7 @@ export default function OrderList() {
                           try {
                             const btn = document.getElementById(`btn-inv-${order.id}`);
                             if (btn) btn.innerText = 'Generating...';
-                            await apiCall(`/businesses/${business.id}/orders/${order.id}/generate-invoice`, 'POST');
+                            await apiCall(`/businesses/${business.id}/orders/${order.id}/generate-invoice`, { method: 'POST' });
                             alert('Invoice generated and sent to customer!');
                             loadOrders();
                           } catch (e: any) {
