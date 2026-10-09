@@ -10,7 +10,7 @@ export default function OrderDetail() {
   const [updating, setUpdating] = useState(false);
   const [newStatus, setNewStatus] = useState('');
   
-  const statusOptions = ['DRAFT', 'CONFIRMED', 'PROCESSING', 'READY', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'];
+  const statusOptions = ['DRAFT', 'PENDING_OWNER_CONFIRMATION', 'CONFIRMED', 'PROCESSING', 'READY', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'];
 
   useEffect(() => {
     loadOrder();
@@ -59,17 +59,40 @@ export default function OrderDetail() {
           <p className="text-slate-500 mt-1">Created on {new Date(order.createdAt).toLocaleString()}</p>
         </div>
         <div className="flex items-center gap-2">
+          {order.status === 'PENDING_OWNER_CONFIRMATION' && (
+            <button
+              onClick={async () => {
+                setUpdating(true);
+                try {
+                  const res = await apiCall(`/businesses/${business.id}/orders/${id}/status`, {
+                    method: 'POST',
+                    body: JSON.stringify({ status: 'CONFIRMED', reason: 'Owner accepted the order' })
+                  });
+                  setOrder(res);
+                  setNewStatus(res.status);
+                  await loadOrder();
+                } catch (error) {
+                  console.error(error);
+                }
+                setUpdating(false);
+              }}
+              disabled={updating}
+              className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2 shadow-sm mr-2"
+            >
+              ✓ Accept Order
+            </button>
+          )}
           <select 
             value={newStatus} 
             onChange={e => setNewStatus(e.target.value)}
-            className="border-slate-300 rounded-md text-sm"
+            className="border-slate-300 rounded-md text-sm bg-white shadow-sm"
           >
             {statusOptions.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
           <button 
             onClick={handleUpdateStatus} 
             disabled={updating || newStatus === order.status}
-            className="px-4 py-2 bg-primary-600 text-white rounded-lg text-sm font-medium hover:bg-primary-700 disabled:opacity-50"
+            className="px-4 py-2 bg-slate-800 text-white rounded-lg text-sm font-medium hover:bg-slate-900 disabled:opacity-50 shadow-sm"
           >
             {updating ? 'Updating...' : 'Update Status'}
           </button>

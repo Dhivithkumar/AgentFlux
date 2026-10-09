@@ -139,19 +139,15 @@ export class QuotationWorkflowService {
     // 4. Save Quotation to DB to get a recordId for DocumentGeneration
     let quotationRecord;
     let quotationNumber = `AF-QTN-${Math.floor(Math.random() * 10000)}`;
-    try {
-        const { quotationService } = require('./QuotationService');
-        quotationRecord = await quotationService.createQuotation(businessId, {
-            customerId: params.customerId,
-            structuredData: { message, financials },
-            lineItems: items
-        });
-        if (quotationRecord && quotationRecord.quotationNumber) {
-            quotationNumber = quotationRecord.quotationNumber;
-        }
-    } catch (e) {
-        // Fallback for tests if db fails
-        quotationRecord = { id: 'mock-quotation-id', quotationNumber };
+    
+    const { quotationService } = require('./QuotationService');
+    quotationRecord = await quotationService.createQuotation(businessId, {
+        customerId: params.customerId,
+        structuredData: { message, financials },
+        lineItems: items
+    });
+    if (quotationRecord && quotationRecord.quotationNumber) {
+        quotationNumber = quotationRecord.quotationNumber;
     }
 
     // 5. Generate Document
@@ -165,14 +161,6 @@ export class QuotationWorkflowService {
         }
         return { status: 'DOCUMENT_GENERATION_FAILED', message: e.message || 'Generation failed', pdfGenerated: false };
     }
-
-    // Mocking Google Drive upload, Google Sheets sync for now since they are tested independently
-    const driveStorageWorks = true;
-    const sheetsSyncWorks = true;
-    
-    const pdfGenerated = true;
-    const pdfAttached = true;
-    const gmailSendWorks = true;
 
     // Concise email body
     const productNameStr = norm.matchedProducts.length === 1 ? norm.matchedProducts[0].productName : 'items';
@@ -210,11 +198,8 @@ ${quotationNumber}.pdf`;
         approvalDetails: approvalReq,
         templateUsed: 'Aasha_Furniture_Quotation_Template.docx',
         message: conciseMessage,
-        pdfGenerated,
-        driveStorageWorks,
-        sheetsSyncWorks,
-        gmailSendWorks,
-        pdfAttached,
+        pdfGenerated: true,
+        pdfAttached: true,
         validation
     };
   }

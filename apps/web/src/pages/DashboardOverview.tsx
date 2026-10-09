@@ -40,7 +40,7 @@ export default function DashboardOverview() {
       setFunnel(funnelRes || { stages: [], conversionRates: {} });
       setRevenue(revRes || { netRevenue: 0, outstandingAmount: 0, refunds: 0 });
       setImprovements(impRes || []);
-      setActionZone(actionRes || { pendingApprovals: [], overdueInvoices: [], stuckEnquiries: [] });
+      setActionZone(actionRes || { pendingApprovals: [], pendingOrders: [], overdueInvoices: [], stuckEnquiries: [] });
     } catch (e) {
       console.error(e);
     } finally {
@@ -107,19 +107,27 @@ export default function DashboardOverview() {
       </div>
 
       {/* Band 2: What Needs You (Action Zone) */}
-      {(actionZone?.pendingApprovals?.length > 0 || actionZone?.overdueInvoices?.length > 0 || actionZone?.stuckEnquiries?.length > 0) && (
-        <section className="bg-white/70 backdrop-blur-xl p-6 rounded-2xl border border-rose-100 shadow-md flex flex-col transition-all duration-300 relative overflow-hidden">
-          <div className="absolute top-0 left-0 w-2 h-full bg-rose-500"></div>
-          <h2 className="text-xl font-bold text-slate-900 mb-6 flex items-center gap-2 ml-4">
-            <AlertCircle size={24} className="text-rose-500" /> What Needs You
-          </h2>
+      {/* Band 2: What Needs You (Action Zone) */}
+      <section className="bg-white/70 backdrop-blur-xl p-6 rounded-2xl border border-rose-100 shadow-md flex flex-col transition-all duration-300 relative overflow-hidden">
+        <div className="absolute top-0 left-0 w-2 h-full bg-rose-500"></div>
+        <h2 className="text-xl font-bold text-slate-900 mb-6 flex items-center gap-2 ml-4">
+          <AlertCircle size={24} className="text-rose-500" /> What Needs You
+        </h2>
+        
+        {(!actionZone?.pendingApprovals?.length && !actionZone?.pendingOrders?.length && !actionZone?.overdueInvoices?.length && !actionZone?.stuckEnquiries?.length) ? (
+          <div className="ml-4 p-8 text-center border-2 border-dashed border-slate-200 rounded-xl bg-slate-50/50">
+            <CheckCircle2 size={32} className="mx-auto text-emerald-400 mb-3" />
+            <h3 className="text-sm font-semibold text-slate-700">You're all caught up!</h3>
+            <p className="text-xs text-slate-500 mt-1">There are no pending approvals, overdue invoices, or stuck orders needing your attention right now.</p>
+          </div>
+        ) : (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 ml-4">
             {/* Approvals */}
-            {actionZone.pendingApprovals.length > 0 && (
-              <div className="flex flex-col gap-3">
-                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Pending Approvals ({actionZone.pendingApprovals.length})</h3>
+            {actionZone?.pendingApprovals?.length > 0 && (
+              <div className="flex flex-col gap-3 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
+                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider sticky top-0 bg-white/90 backdrop-blur pb-2 pt-1 z-10">Pending Approvals ({actionZone.pendingApprovals.length})</h3>
                 {actionZone.pendingApprovals.map((ap: any) => (
-                  <Link key={ap.id} to={`/dashboard/approvals`} className="block p-4 rounded-xl bg-amber-50 border border-amber-200 hover:bg-amber-100 hover:shadow-sm transition-all group">
+                  <Link key={ap.id} to={`/dashboard/approvals`} className="block p-4 rounded-xl bg-amber-50 border border-amber-200 hover:bg-amber-100 hover:shadow-sm transition-all group shrink-0">
                     <div className="flex justify-between items-center">
                       <p className="text-sm font-semibold text-amber-900 group-hover:text-amber-700 transition-colors">Review Required</p>
                       <AlertCircle size={16} className="text-amber-500" />
@@ -130,8 +138,24 @@ export default function DashboardOverview() {
               </div>
             )}
             
+            {/* Pending Orders (Owner Confirmation) */}
+            {actionZone?.pendingOrders?.length > 0 && (
+              <div className="flex flex-col gap-3 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
+                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider sticky top-0 bg-white/90 backdrop-blur pb-2 pt-1 z-10">Owner Confirmation ({actionZone.pendingOrders.length})</h3>
+                {actionZone.pendingOrders.map((order: any) => (
+                  <Link key={order.id} to={`/dashboard/orders/${order.id}`} className="block p-4 rounded-xl bg-blue-50 border border-blue-200 hover:bg-blue-100 hover:shadow-sm transition-all group shrink-0">
+                    <div className="flex justify-between items-center">
+                      <p className="text-sm font-semibold text-blue-900 group-hover:text-blue-700 transition-colors truncate pr-2">{order.customer?.name || 'Customer'}</p>
+                      <AlertCircle size={16} className="text-blue-500" />
+                    </div>
+                    <p className="text-xs text-blue-700 mt-1">Order {order.id.substring(0,8)} requires your confirmation.</p>
+                  </Link>
+                ))}
+              </div>
+            )}
+            
             {/* Overdue */}
-            {actionZone.overdueInvoices.length > 0 && (
+            {actionZone?.overdueInvoices?.length > 0 && (
               <div className="flex flex-col gap-3">
                 <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Overdue Payments ({actionZone.overdueInvoices.length})</h3>
                 {actionZone.overdueInvoices.map((inv: any) => (
@@ -147,7 +171,7 @@ export default function DashboardOverview() {
             )}
 
             {/* Stuck */}
-            {actionZone.stuckEnquiries.length > 0 && (
+            {actionZone?.stuckEnquiries?.length > 0 && (
               <div className="flex flex-col gap-3">
                 <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Stuck Enquiries ({actionZone.stuckEnquiries.length})</h3>
                 {actionZone.stuckEnquiries.map((enq: any) => (
@@ -162,8 +186,8 @@ export default function DashboardOverview() {
               </div>
             )}
           </div>
-        </section>
-      )}
+        )}
+      </section>
 
       {/* Band 3: The Flow */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">

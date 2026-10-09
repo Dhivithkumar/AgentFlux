@@ -149,45 +149,8 @@ export class InvoiceService {
   }
 
   async syncToSheets(businessId: string, invoiceId: string) {
-    const invoice = await prisma.invoice.findUnique({
-      where: { id: invoiceId, businessId },
-      include: { customer: true }
-    });
-    if (!invoice) throw new Error('Invoice not found');
-
-    const config = await prisma.operationalSheetConfig.findFirst({
-      where: { businessId, status: 'SYNCED' }
-    });
-
-    if (!config) return; // No sheet connected
-
-    try {
-      const sheetsProvider = getConnectorProvider('GOOGLE_SHEETS');
-      
-      const rowData = [
-        invoice.invoiceNumber,
-        invoice.invoiceDate.toISOString().split('T')[0],
-        invoice.dueDate ? invoice.dueDate.toISOString().split('T')[0] : '',
-        invoice.orderId || '',
-        invoice.quotationId || '',
-        invoice.customer?.name || '',
-        invoice.customer?.email || '',
-        invoice.customer?.phone || '',
-        invoice.subtotal.toString(),
-        invoice.discountAmount.toString(),
-        invoice.taxAmount.toString(),
-        invoice.totalAmount.toString(),
-        invoice.paidAmount.toString(),
-        invoice.outstandingAmount.toString(),
-        invoice.status,
-        new Date().toISOString()
-      ];
-
-      await (sheetsProvider as any).appendRow(businessId, config.spreadsheetId, 'Invoices!A:P', rowData);
-    } catch (e) {
-      console.error('Failed to sync invoice to sheets, keeping valid state', e);
-      // Mark as SHEETS_SYNC_PENDING logic in audit/sync jobs
-    }
+    const { operationalSyncPoller } = require('../queue/operationalSyncPoller');
+    operationalSyncPoller.enqueue(businessId, 'INVOICE', invoiceId, 'SYNC').catch(console.error);
   }
 
   async sendInvoice(businessId: string, invoiceId: string) {
@@ -274,6 +237,32 @@ export class InvoiceService {
     } catch (e: any) {
       throw new Error(`GMAIL_SEND_FAILED: ${e.message}`);
     }
+  }
+
+  async getInvoice(businessId: string, id: string) {
+    return prisma.invoice.findUnique({
+      where: { id, businessId },
+      include: { customer: true, order: true }
+    });
+  }
+
+  async updateStatus(businessId: string, id: string, status: InvoiceStatus) {
+    return prisma.invoice.update({
+      where: { id, businessId },
+      data: { status }
+    });
+  }
+
+  async createInvoice(businessId: string, data: any) {
+    return this.generateInvoice(businessId, data.orderId);
+  }
+
+  async convertFromQuotation(businessId: string, quotationId: string) {
+     const order = await prisma.order.findFirst({
+        where: { businessId, quotationId }
+     });
+     if (!order) throw new Error("Order not found for this quotation. Cannot generate invoice without an order.");
+     return this.generateInvoice(businessId, order.id);
   }
 }
 

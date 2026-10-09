@@ -62,6 +62,8 @@ class OperationalSyncPoller {
         await operationalSyncService.syncCustomer(job.businessId, job.entityId);
       } else if (job.entityType === 'ORDER') {
         await operationalSyncService.syncOrder(job.businessId, job.entityId);
+      } else if (job.entityType === 'INVOICE') {
+        await operationalSyncService.syncInvoice(job.businessId, job.entityId);
       } else {
         throw new Error(`Unknown entity type: ${job.entityType}`);
       }
@@ -112,7 +114,7 @@ class OperationalSyncPoller {
     }
   }
 
-  async enqueue(businessId: string, entityType: 'ENQUIRY' | 'CUSTOMER' | 'ORDER', entityId: string, operation: string) {
+  async enqueue(businessId: string, entityType: 'ENQUIRY' | 'CUSTOMER' | 'ORDER' | 'INVOICE', entityId: string, operation: string) {
     const job = await prisma.operationalSyncJob.create({
       data: {
         businessId,

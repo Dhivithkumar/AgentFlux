@@ -1,9 +1,12 @@
 import { Router, Request, Response } from 'express';
 import { prisma } from '@agent-flux/database';
-import { authenticate } from '../middleware/auth';
+import { authenticate, requireBusinessMembership } from '../middleware/auth';
 import { AgentRuntime } from '../services/agent/AgentRuntime';
 
 const router = Router({ mergeParams: true });
+
+router.use(authenticate);
+router.use(requireBusinessMembership);
 
 // GET /api/businesses/:businessId/agents
 router.get('/', authenticate, async (req: Request, res: Response) => {

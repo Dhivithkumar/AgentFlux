@@ -1,10 +1,12 @@
 // @ts-nocheck
 import { Router, Request, Response } from 'express';
 import { prisma, ApprovalStatus, ExecutionStatus } from '@agent-flux/database';
-import { authenticate } from '../middleware/auth';
+import { authenticate, requireBusinessMembership } from '../middleware/auth';
 import { WorkflowEngine } from '../services/workflow/engine';
 
 const router = Router();
+router.use(authenticate);
+router.use(requireBusinessMembership);
 
 // GET /api/approvals
 router.get('/', authenticate, async (req: Request, res: Response) => {

@@ -44,15 +44,13 @@ ToolRegistry.register({
   riskLevel: 'LOW',
   requiredPermissions: ['KNOWLEDGE.READ'],
   execute: async (context, input) => {
-     // Simulated or actual RAG search
-     // If no RAG is implemented for Phase 9, mock returning data
-     const docs = await prisma.knowledgeDocument.findMany({
-       where: { businessId: context.businessId },
-       take: 5
+     const { knowledgeService } = require('../knowledge');
+     const searchResults = await knowledgeService.searchKnowledgeBase({
+         businessId: context.businessId,
+         query: input.query,
+         topK: 5
      });
-     return {
-       results: docs.map(d => ({ filename: d.filename, contentHash: d.contentHash }))
-     };
+     return { results: searchResults };
   }
 });
 

@@ -54,4 +54,73 @@ export class GroqProvider implements AIProvider {
       return { provider: 'GROQ', model: AIConfiguration.groq.fallbackModel, status: 'UNAVAILABLE', error: e.message };
     }
   }
+
+  async generateResponse(request: import('./interfaces').GenerateResponseRequest): Promise<import('./interfaces').GenerateResponseResult> {
+    const start = Date.now();
+    
+    let groqTools = undefined;
+    if (request.tools && request.tools.length > 0) {
+      groqTools = request.tools.map(t => ({
+        type: 'function',
+        function: {
+          name: t.name,
+          description: t.description,
+          parameters: {
+            type: 'object',
+            properties: t.inputSchema?.properties || {},
+            required: t.inputSchema?.required || []
+          }
+        }
+      }));
+    }
+
+    const messages: any[] = [];
+    if (request.systemInstructions) {
+      messages.push({ role: 'system', content: request.systemInstructions });
+    }
+
+    const formattedHistory = request.history.map(m => ({
+      role: m.role === 'user' ? 'user' : 'assistant',
+      content: m.content || (Array.isArray(m.parts) ? m.parts[0]?.text : '')
+    }));
+    messages.push(...formattedHistory);
+
+    try {
+      const completion = await this.groq.chat.completions.create({
+        messages: messages,
+        model: request.config?.model || AIConfiguration.groq.fallbackModel,
+        tools: groqTools as any,
+        tool_choice: groqTools ? 'auto' : 'none'
+      });
+
+      const responseMessage = completion.choices[0]?.message;
+      
+      const structuredContent: import('./interfaces').StructuredContent = {
+        text: responseMessage?.content || undefined,
+      };
+
+      if (responseMessage?.tool_calls && responseMessage.tool_calls.length > 0) {
+        structuredContent.toolCalls = responseMessage.tool_calls.map(tc => ({
+          id: tc.id,
+          name: tc.function.name,
+          arguments: JSON.parse(tc.function.arguments || '{}')
+        }));
+      }
+
+      const usage = {
+        inputTokens: completion.usage?.prompt_tokens || 0,
+        outputTokens: completion.usage?.completion_tokens || 0,
+        totalTokens: completion.usage?.total_tokens || 0
+      };
+
+      return {
+        content: structuredContent,
+        usage,
+        latency: Date.now() - start
+      };
+    } catch (error) {
+      console.error('Groq Provider Error (generateResponse):', error);
+      throw error;
+    }
+  }
 }

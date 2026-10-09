@@ -346,7 +346,6 @@ router.get('/action-zone', async (req: AuthRequest, res) => {
     
     const pendingApprovals = await prisma.approvalRequest.findMany({
       where: { businessId, status: 'PENDING' },
-      take: 5,
       orderBy: { createdAt: 'desc' }
     });
 
@@ -357,7 +356,7 @@ router.get('/action-zone', async (req: AuthRequest, res) => {
         dueDate: { lt: new Date() }
       },
       include: { order: { include: { customer: true } } },
-      take: 5,
+      take: 10,
       orderBy: { dueDate: 'asc' }
     });
 
@@ -369,14 +368,24 @@ router.get('/action-zone', async (req: AuthRequest, res) => {
         createdAt: { lt: twoDaysAgo }
       },
       include: { customer: true },
-      take: 5,
+      take: 10,
       orderBy: { createdAt: 'asc' }
+    });
+
+    const pendingOrders = await prisma.order.findMany({
+      where: {
+        businessId,
+        status: 'PENDING_OWNER_CONFIRMATION'
+      },
+      include: { customer: true },
+      orderBy: { createdAt: 'desc' }
     });
 
     res.json({
       pendingApprovals,
       overdueInvoices,
-      stuckEnquiries
+      stuckEnquiries,
+      pendingOrders
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

@@ -1,11 +1,11 @@
 import { prisma } from '@agent-flux/database';
 import { getConnectorProvider } from '../../connectors/registry';
-import { AASHA_PRODUCTS, AASHA_TAX_CONFIG } from '../knowledge/aashaKnowledgeData';
+import { HybridRetrievalEngine } from '../knowledge/HybridRetrievalEngine';
 import { quotationService } from '../quotation/QuotationService';
 import { invoiceService } from '../invoice/InvoiceService';
 import { EventBus } from '../eventBus';
 import { connection as redis } from '../queue/connection';
-import { AIProviderFactory } from '../agent/providers/AIProvider';
+import { aiManager } from '../ai';
 
 export class ConversationOrchestrator {
   public static async processIncomingMessage(businessId: string, emailPayload: any, integrationId?: string) {
@@ -78,22 +78,29 @@ export class ConversationOrchestrator {
             where: { businessId, quotationId: existingQuotation.id } as any
         }) : null;
 
+        const { knowledgeService } = require('../knowledge');
+        const productDocs = await knowledgeService.searchKnowledgeBase({
+             businessId, query: 'product catalogue list', topK: 5
+        });
+        const taxDocs = await knowledgeService.searchKnowledgeBase({
+             businessId, query: 'tax rate gst', topK: 1
+        });
+
         const conversationContext = {
-            businessContext: { currency: 'INR', taxRate: AASHA_TAX_CONFIG.taxRatePercentage },
+            businessContext: { 
+                taxInfo: taxDocs.length > 0 ? taxDocs[0].content : '18% GST default',
+                currency: 'INR'
+            },
             customerContext: { name: customer.name, email: customer.email },
             threadContext: { threadId, previousEnquiryData: previousEnquiry?.structuredData },
             activeObjects: {
                 quotationStatus: existingQuotation ? existingQuotation.status : null,
                 orderStatus: activeOrder ? activeOrder.status : null
             },
-            knowledgeBase: AASHA_PRODUCTS.map(p => ({
-                id: p.sku, name: p.productName, price: p.basePrice,
-                productionDays: p.productionDays, warranty: p.warranty, aliases: p.aliases
-            }))
+            knowledgeBase: productDocs.map((d: any) => d.content)
         };
 
         // STEP 4 - AI UNDERSTANDING
-        const aiProvider = AIProviderFactory.getProvider('gemini');
         const systemInstruction = `
 You are the semantic understanding engine for Agent Flux V2 (Aasha Furniture).
 Your goal is to understand the customer's email and output STRICT JSON.
@@ -126,21 +133,15 @@ Rules:
 
         let aiResponse;
         try {
-            aiResponse = await aiProvider.generateResponse(
-                systemInstruction,
-                [{ role: 'user', content: userPrompt }],
-                [],
-                { model: '', temperature: 0.1 }
-            );
+            aiResponse = await aiManager.generateResponse({
+                systemInstructions: systemInstruction,
+                history: [{ role: 'user', content: userPrompt }],
+                tools: [],
+                config: { temperature: 0.1 }
+            });
         } catch (error: any) {
-            console.error("[ConversationOrchestrator] Gemini failed, falling back to Groq:", error.message);
-            const groqProvider = AIProviderFactory.getProvider('groq');
-            aiResponse = await groqProvider.generateResponse(
-                systemInstruction,
-                [{ role: 'user', content: userPrompt }],
-                [],
-                { model: '', temperature: 0.1 }
-            );
+            console.error("[ConversationOrchestrator] AI generation failed:", error.message);
+            aiResponse = { content: { text: '{}' } };
         }
 
         let parsedAi;
@@ -172,13 +173,19 @@ Rules:
         // STEP 5 - ENTITY RESOLUTION & KNOWLEDGE RETRIEVAL
         let matchedProduct = null;
         if (extracted.productName) {
-            const lowerName = extracted.productName.toLowerCase();
-            matchedProduct = AASHA_PRODUCTS.find(p => 
-                p.productName.toLowerCase() === lowerName ||
-                p.productName.toLowerCase().includes(lowerName) || 
-                p.aliases.some(a => lowerName.includes(a.toLowerCase()))
-            );
-            if (matchedProduct) extracted.productName = matchedProduct.productName;
+            const retrieval = await HybridRetrievalEngine.retrieve({ 
+                businessId, query: extracted.productName, topK: 1
+            });
+            if (retrieval.matched && retrieval.sku) {
+                matchedProduct = {
+                    sku: retrieval.sku,
+                    productName: retrieval.productName || extracted.productName,
+                    basePrice: retrieval.answerableFacts['price']?.value || 0,
+                    productionDays: retrieval.answerableFacts['productionDays']?.value || 7,
+                    warranty: retrieval.answerableFacts['warranty']?.value || 'Standard'
+                };
+                extracted.productName = matchedProduct.productName;
+            }
         }
 
         // STEP 7 - STATE-AWARE DECISION & ACTION PLAN
@@ -201,6 +208,7 @@ Rules:
         currentState = 'FAILED';
         console.error(`[ConversationOrchestrator] State: ${currentState} for ${messageId} | Error:`, error.message);
         await redis.del(`processed_email:${messageId}`);
+        throw error;
     }
   }
 
@@ -255,10 +263,13 @@ Rules:
 
       if (actionPlan.primaryAction === 'CREATE_QUOTATION') {
           if (!existingQuotation) {
+              const taxMatch = (await require('../knowledge').knowledgeService.searchKnowledgeBase({businessId, query:'tax rate', topK:1}))[0]?.content || '18';
+              const taxRate = parseFloat(taxMatch.match(/(\d+)/)?.[0] || '18');
+              
               const lineItems = [{
                   sku: product.sku, description: product.productName,
                   quantity: extracted.quantity, unitPrice: product.basePrice,
-                  discount: 0, taxRate: AASHA_TAX_CONFIG.taxRatePercentage
+                  discount: 0, taxRate
               }];
               existingQuotation = await quotationService.createQuotation(businessId, {
                   customerId: customer.id, lineItems, gmailThreadId: threadId
@@ -277,8 +288,11 @@ Rules:
               await quotationService.updateStatus(businessId, existingQuotation.id, 'SENT', 'system');
           }
 
+          const taxRateMatch = (await require('../knowledge').knowledgeService.searchKnowledgeBase({businessId, query:'tax rate', topK:1}))[0]?.content || '18';
+          const taxRate = parseFloat(taxRateMatch.match(/(\d+)/)?.[0] || '18');
+          
           const subtotal = product.basePrice * extracted.quantity;
-          const tax = subtotal * (AASHA_TAX_CONFIG.taxRatePercentage / 100);
+          const tax = subtotal * (taxRate / 100);
           const total = subtotal + tax;
 
           replyHtml = `
@@ -297,8 +311,11 @@ Rules:
       }
 
       if (actionPlan.primaryAction === 'SEND_PRICE_INFO') {
+          const taxRateMatch = (await require('../knowledge').knowledgeService.searchKnowledgeBase({businessId, query:'tax rate', topK:1}))[0]?.content || '18';
+          const taxRate = parseFloat(taxRateMatch.match(/(\d+)/)?.[0] || '18');
+
           const subtotal = product.basePrice * extracted.quantity;
-          const tax = subtotal * (AASHA_TAX_CONFIG.taxRatePercentage / 100);
+          const tax = subtotal * (taxRate / 100);
           const total = subtotal + tax;
 
           replyHtml = `
@@ -309,7 +326,7 @@ Rules:
               <li>Product: ${product.productName}</li>
               <li>Quantity: ${extracted.quantity}</li>
               <li>Base Price: ₹${product.basePrice.toLocaleString('en-IN')}</li>
-              <li>GST (${AASHA_TAX_CONFIG.taxRatePercentage}%): ₹${tax.toLocaleString('en-IN')}</li>
+              <li>GST (${taxRate}%): ₹${tax.toLocaleString('en-IN')}</li>
               <li><strong>Total Price: ₹${total.toLocaleString('en-IN')}</strong></li>
             </ul>
             <p>Production Lead Time: ${product.productionDays} working days</p>

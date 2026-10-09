@@ -125,16 +125,7 @@ export class EmailPoller {
         const to = headers.find((h: any) => h.name === 'To')?.value || '';
         const date = headers.find((h: any) => h.name === 'Date')?.value || '';
         
-        // Very simple body parser (base64url decode)
-        let body = '';
-        if (msgData.payload.parts) {
-            const textPart = msgData.payload.parts.find((p: any) => p.mimeType === 'text/plain');
-            if (textPart && textPart.body.data) {
-                body = Buffer.from(textPart.body.data, 'base64').toString('utf-8');
-            }
-        } else if (msgData.payload.body?.data) {
-            body = Buffer.from(msgData.payload.body.data, 'base64').toString('utf-8');
-        }
+        let body = this.parseEmailBody(msgData.payload);
 
         const payload = {
             email: {
@@ -154,6 +145,7 @@ export class EmailPoller {
         
         // Pass msg.id as idempotencyKey so we don't process same email twice if mark-as-read fails
         // Replace legacy generic workflow with canonical ConversationOrchestrator
+        let success = false;
         try {
           const { ConversationOrchestrator } = require('../intake/ConversationOrchestrator');
           await ConversationOrchestrator.processIncomingMessage(
@@ -161,32 +153,71 @@ export class EmailPoller {
               payload.email,
               integration.id
           );
+          success = true;
         } catch (execErr: any) {
           console.error(`Workflow execution failed for ${workflow.id}:`, execErr);
         }
 
-        // Mark as read so we don't fetch it again
-        const markAsReadRes = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}/modify`, {
-            method: 'POST',
-            headers: { 
-                Authorization: `Bearer ${accessToken}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                removeLabelIds: ['UNREAD']
-            })
-        });
-        
-        if (!markAsReadRes.ok) {
-            console.error(`Failed to mark email ${msg.id} as read:`, await markAsReadRes.text());
+        if (success) {
+            // Mark as read so we don't fetch it again
+            const markAsReadRes = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}/modify`, {
+                method: 'POST',
+                headers: { 
+                    Authorization: `Bearer ${accessToken}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    removeLabelIds: ['UNREAD']
+                })
+            });
+            
+            if (!markAsReadRes.ok) {
+                console.error(`Failed to mark email ${msg.id} as read:`, await markAsReadRes.text());
+            } else {
+                console.log(`EmailPoller: Successfully marked email ${msg.id} as read.`);
+            }
         } else {
-            console.log(`EmailPoller: Successfully marked email ${msg.id} as read.`);
+            console.log(`EmailPoller: Skipping mark-as-read for email ${msg.id} due to execution failure.`);
         }
       }
 
     } catch (e) {
       console.error(`Error processing emails for workflow ${workflow.id}:`, e);
     }
+  }
+  private parseEmailBody(payload: any): string {
+    let body = '';
+    if (payload.mimeType === 'text/plain' && payload.body?.data) {
+      body = Buffer.from(payload.body.data, 'base64url').toString('utf-8');
+    } else if (payload.mimeType === 'text/html' && payload.body?.data && !body) {
+      body = Buffer.from(payload.body.data, 'base64url').toString('utf-8');
+    } else if (payload.parts && payload.parts.length > 0) {
+      const plainTextPart = this.findMimePart(payload.parts, 'text/plain');
+      if (plainTextPart && plainTextPart.body?.data) {
+        body = Buffer.from(plainTextPart.body.data, 'base64url').toString('utf-8');
+      } else {
+        const htmlPart = this.findMimePart(payload.parts, 'text/html');
+        if (htmlPart && htmlPart.body?.data) {
+          body = Buffer.from(htmlPart.body.data, 'base64url').toString('utf-8');
+        }
+      }
+    } else if (payload.body?.data) {
+       body = Buffer.from(payload.body.data, 'base64url').toString('utf-8');
+    }
+    return body;
+  }
+
+  private findMimePart(parts: any[], mimeType: string): any {
+    for (const part of parts) {
+      if (part.mimeType === mimeType) {
+        return part;
+      }
+      if (part.parts && part.parts.length > 0) {
+        const found = this.findMimePart(part.parts, mimeType);
+        if (found) return found;
+      }
+    }
+    return null;
   }
 }
 

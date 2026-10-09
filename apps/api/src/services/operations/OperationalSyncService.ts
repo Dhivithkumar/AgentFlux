@@ -48,7 +48,17 @@ export class OperationalSyncService {
       ]
     };
 
-    return [enquiriesSchema, customersSchema, followupsSchema, ordersSchema];
+    const invoicesSchema: OperationalWorksheetSchema = {
+      name: 'Invoices',
+      headers: [
+        'Invoice ID', 'Invoice Number', 'Invoice Date', 'Due Date', 'Order ID', 
+        'Quotation ID', 'Customer Name', 'Email', 'Phone', 'Subtotal', 
+        'Discount', 'Tax', 'Total Amount', 'Paid Amount', 'Outstanding Amount', 
+        'Status', 'Last Synced At'
+      ]
+    };
+
+    return [enquiriesSchema, customersSchema, followupsSchema, ordersSchema, invoicesSchema];
   }
 
   async initializeConfig(businessId: string, integrationId: string): Promise<any> {
@@ -285,6 +295,58 @@ export class OperationalSyncService {
     }
   }
 
+  async syncInvoice(businessId: string, invoiceId: string): Promise<void> {
+    try {
+      const config = await prisma.operationalSheetConfig.findUnique({ where: { businessId } });
+      if (!config || !config.spreadsheetId) return;
+
+      const invoice = await prisma.invoice.findUnique({
+        where: { id: invoiceId },
+        include: { customer: true }
+      });
+      if (!invoice) return;
+
+      const data: Record<string, any> = {
+        'Invoice ID': invoice.id,
+        'Invoice Number': invoice.invoiceNumber,
+        'Invoice Date': invoice.invoiceDate.toISOString().split('T')[0],
+        'Due Date': invoice.dueDate ? invoice.dueDate.toISOString().split('T')[0] : '',
+        'Order ID': invoice.orderId || '',
+        'Quotation ID': invoice.quotationId || '',
+        'Customer Name': invoice.customer?.name || '',
+        'Email': invoice.customer?.email || '',
+        'Phone': invoice.customer?.phone || '',
+        'Subtotal': invoice.subtotal.toString(),
+        'Discount': invoice.discountAmount.toString(),
+        'Tax': invoice.taxAmount.toString(),
+        'Total Amount': invoice.totalAmount.toString(),
+        'Paid Amount': invoice.paidAmount.toString(),
+        'Outstanding Amount': invoice.outstandingAmount.toString(),
+        'Status': invoice.status,
+        'Last Synced At': new Date().toISOString()
+      };
+
+      const row: OperationalRow = { id: invoice.id, data };
+      const adapter = new GoogleSheetsAdapter(config.integrationId);
+      
+      const schemas = await this.getBusinessSchema(businessId);
+      const invoiceSchema = schemas.find(s => s.name === 'Invoices')!;
+      await adapter.ensureWorksheetAndHeaders(config.spreadsheetId, invoiceSchema);
+
+      await adapter.syncRecords(config.spreadsheetId, 'Invoices', [row]);
+      
+      await prisma.operationalSheetConfig.update({
+        where: { businessId },
+        data: { status: 'SYNCED', lastSyncedAt: new Date(), errorMessage: null }
+      });
+    } catch (e: any) {
+      await prisma.operationalSheetConfig.updateMany({
+        where: { businessId },
+        data: { status: 'FAILED', errorMessage: e.message }
+      });
+    }
+  }
+
   async syncCustomer(businessId: string, customerId: string): Promise<void> {
     try {
       const config = await prisma.operationalSheetConfig.findUnique({ where: { businessId } });
@@ -342,6 +404,7 @@ export class OperationalSyncService {
       const customers = await prisma.customer.findMany({ where: { businessId } });
 
       const orders = await prisma.order.findMany({ where: { businessId } });
+      const invoices = await prisma.invoice.findMany({ where: { businessId } });
 
       for (const enq of enquiries) {
         // Enqueue instead of blocking
@@ -357,6 +420,11 @@ export class OperationalSyncService {
       for (const ord of orders) {
         import('../queue/operationalSyncPoller').then(mod => {
           mod.operationalSyncPoller.enqueue(businessId, 'ORDER', ord.id, 'SYNC_ALL').catch(console.error);
+        });
+      }
+      for (const inv of invoices) {
+        import('../queue/operationalSyncPoller').then(mod => {
+          mod.operationalSyncPoller.enqueue(businessId, 'INVOICE' as any, inv.id, 'SYNC_ALL').catch(console.error);
         });
       }
       

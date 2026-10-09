@@ -105,16 +105,11 @@ export class AIProviderManager {
   }
 
   async generateStructured<T>(request: GenerateStructuredRequest): Promise<T> {
-    if (process.env.NODE_ENV !== 'production' && (process.env.NODE_ENV === 'test' || process.env.MOCK_AI === 'true')) {
-      console.warn("Using mock AI generation for test/development");
-      return {
-        summary: "Mock AI summary",
-        confidence: "HIGH",
-        nextAction: "MOCK_ACTION",
-        fields: { product: "mock table", quantity: 6, pickup: "Tiruppur", destination: "Chennai" }
-      } as any;
-    }
     return this.executeWithRetryAndFallback('generateStructured', provider => provider.generateStructured<T>(request));
+  }
+
+  async generateResponse(request: import('./interfaces').GenerateResponseRequest): Promise<import('./interfaces').GenerateResponseResult> {
+    return this.executeWithRetryAndFallback('generateResponse', provider => provider.generateResponse(request));
   }
 
   async embed(request: EmbeddingRequest): Promise<number[]> {

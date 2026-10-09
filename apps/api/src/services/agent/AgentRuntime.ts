@@ -1,5 +1,5 @@
 import { prisma } from '@agent-flux/database';
-import { AIProviderFactory } from './providers/AIProvider';
+import { aiManager } from '../ai';
 import { ToolRegistry } from './ToolRegistry';
 
 export class AgentRuntime {
@@ -94,14 +94,12 @@ export class AgentRuntime {
           temperature: agent.temperature
         };
 
-        const aiProvider = AIProviderFactory.getProvider('gemini');
-        
-        const response = await aiProvider.generateResponse(
-          systemInstructions,
-          history,
-          allowedTools,
-          providerConfig
-        );
+        const response = await aiManager.generateResponse({
+          systemInstructions: systemInstructions,
+          history: history,
+          tools: allowedTools,
+          config: providerConfig
+        });
 
         const step = await prisma.agentExecutionStep.create({
           data: {

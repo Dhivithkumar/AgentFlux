@@ -70,7 +70,7 @@ export class OrderService {
               // @ts-ignore - Prisma client out of sync
               quotationId: quotation.id,
               orderNumber,
-              status: 'CONFIRMED',
+              status: 'PENDING_OWNER_CONFIRMATION',
               source: 'GMAIL',
               subtotal: quotation.subtotal,
               discount: quotation.discountAmount,
@@ -79,8 +79,8 @@ export class OrderService {
               currency: quotation.currency,
               statusHistory: {
                 create: {
-                  toStatus: 'CONFIRMED',
-                  reason: 'Customer accepted quotation via email'
+                  toStatus: 'PENDING_OWNER_CONFIRMATION',
+                  reason: 'Customer accepted quotation via email, pending owner review'
                 }
               }
             }
@@ -118,7 +118,7 @@ export class OrderService {
       } catch (err: any) {
         if (err.message === 'QUOTATION_ALREADY_PROCESSED') {
           // @ts-ignore - Prisma client out of sync
-          const raceOrder = await prisma.order.findFirst({ where: { quotationId: quotation.id } });
+          const raceOrder = await prisma.order.findFirst({ where: { businessId, quotationId: quotation.id } });
           if (raceOrder) {
             order = raceOrder;
             break;
@@ -183,13 +183,13 @@ export class OrderService {
 
     const emailBody = `Dear ${customer?.name || 'Customer'},
 
-Thank you for confirming your order.
+Thank you for accepting the quotation.
 
-Your order for ${orderItemsSummary} has been confirmed.
+Your order request for ${orderItemsSummary} has been received and is currently pending final confirmation from our team.
 
 Delivery Location: ${deliveryLocation}.
 
-We will proceed with the next steps and keep you updated.
+We will review your request and send you the formal order confirmation and invoice shortly.
 
 Warm regards,
 Aasha Furniture Team`;
@@ -392,6 +392,18 @@ Aasha Furniture Team`;
 
     // Operational Sync
     operationalSyncPoller.enqueue(businessId, 'ORDER', updatedOrder.id, 'STATUS_UPDATE').catch(console.error);
+
+    // Trigger Invoice Generation Pipeline explicitly if owner confirmed
+    if (newStatus === 'CONFIRMED' && order.status === 'PENDING_OWNER_CONFIRMATION') {
+        const { invoiceService } = require('../invoice/InvoiceService');
+        try {
+            const invoiceId = await invoiceService.generateInvoice(businessId, updatedOrder.id);
+            // Optionally auto-send or rely on another trigger. We'll auto-send since it's confirmed.
+            invoiceService.sendInvoice(businessId, invoiceId).catch(console.error);
+        } catch (e) {
+            console.error('[OrderService] Failed to generate/send invoice upon confirmation:', e);
+        }
+    }
 
     return updatedOrder;
   }
