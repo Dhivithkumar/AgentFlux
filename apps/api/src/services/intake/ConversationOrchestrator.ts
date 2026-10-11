@@ -481,8 +481,9 @@ Rules:
           const calendarClient = google.calendar({ version: 'v3', auth: oauth2Client });
 
           const event = {
-              summary: `Aasha Furniture Discussion with ${customer.name || 'Customer'}`,
-              description: `Discussion regarding custom furniture and requirements.${topic ? ` Topic: ${topic}` : ''}`,
+              summary: `[Agent Flux] Discussion: ${customer.name || 'Customer'}`,
+              description: `[Agent Flux Automated Schedule] Consultation booked automatically by Agent Flux AI.${topic ? ` Topic: ${topic}` : ''}\nCustomer: ${customer.name || 'Customer'} (${customer.email || 'N/A'})`,
+              colorId: '2', // Sage Green in Google Calendar for distinct automated event coloring
               start: {
                   dateTime: slot.startIso,
                   timeZone: 'Asia/Kolkata'

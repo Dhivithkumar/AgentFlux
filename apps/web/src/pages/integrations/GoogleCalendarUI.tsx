@@ -1,7 +1,20 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import { apiCall } from '../../lib/api';
-import { Calendar as CalendarIcon, Loader2, Plus, Clock, FileText, CheckCircle2 } from 'lucide-react';
+import { 
+  Calendar as CalendarIcon, 
+  Loader2, 
+  Plus, 
+  Clock, 
+  FileText, 
+  CheckCircle2, 
+  Sparkles, 
+  Video, 
+  Users, 
+  Bot, 
+  Zap,
+  ExternalLink
+} from 'lucide-react';
 import { format, isToday, isTomorrow, parseISO } from 'date-fns';
 
 export function GoogleCalendarUI() {
@@ -12,6 +25,7 @@ export function GoogleCalendarUI() {
   const [loading, setLoading] = useState(true);
   const [loadingEvents, setLoadingEvents] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [activeFilter, setActiveFilter] = useState<'ALL' | 'AGENT_FLUX' | 'GENERAL' | 'HOLIDAYS'>('ALL');
 
   // New Event State
   const [isCreating, setIsCreating] = useState(false);
@@ -88,13 +102,25 @@ export function GoogleCalendarUI() {
       });
       setNewEvent({ ...newEvent, summary: '' });
       fetchEvents(); // Refresh right side list
-      // Note: iframe doesn't auto-refresh, but that's standard for embedded frames
     } catch (err) {
       console.error(err);
       alert('Failed to create event');
     } finally {
       setIsCreating(false);
     }
+  };
+
+  const isAgentFluxEvent = (evt: any): boolean => {
+    const title = (evt.summary || '').toLowerCase();
+    const desc = (evt.description || '').toLowerCase();
+    return (
+      title.includes('agent flux') ||
+      title.includes('aasha furniture') ||
+      desc.includes('agent flux') ||
+      desc.includes('scheduled automatically') ||
+      evt.colorId === '2' || // Sage Green
+      evt.colorId === '3'    // Grape Purple
+    );
   };
 
   const categorizedEvents = useMemo(() => {
@@ -104,7 +130,7 @@ export function GoogleCalendarUI() {
 
     events.forEach(evt => {
       const title = (evt.summary || '').toLowerCase();
-      if (title.includes('agent flux')) {
+      if (isAgentFluxEvent(evt)) {
         agentFluxEvents.push(evt);
       } else if (title.includes('holiday') || title.includes('vacation')) {
         holidays.push(evt);
@@ -136,21 +162,105 @@ export function GoogleCalendarUI() {
   }
 
   const formatEventTime = (evt: any) => {
-    if (evt.start?.date) return 'All Day'; // All day event
+    if (evt.start?.date) return 'All Day';
     if (!evt.start?.dateTime) return '';
     return format(parseISO(evt.start.dateTime), 'h:mm a');
   };
 
-  const EventCard = ({ evt, badgeColor, badgeText }: { evt: any, badgeColor: string, badgeText: string }) => (
-    <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm flex flex-col gap-2 hover:shadow-md transition-all">
-      <div className="flex justify-between items-start">
-        <h4 className="font-bold text-slate-800 text-sm truncate pr-2">{evt.summary || 'Untitled Event'}</h4>
-        <span className={`text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full whitespace-nowrap ${badgeColor}`}>
-          {badgeText}
-        </span>
-      </div>
-      <div className="flex items-center gap-4 text-xs text-slate-500 font-medium">
-        <div className="flex items-center gap-1.5">
+  const EventCard = ({ evt }: { evt: any }) => {
+    const isAgent = isAgentFluxEvent(evt);
+    const title = (evt.summary || '').toLowerCase();
+    const isHoliday = title.includes('holiday') || title.includes('vacation');
+
+    // Distinct Visual Styling: Agent Flux Automated Schedule
+    if (isAgent) {
+      return (
+        <div className="bg-gradient-to-br from-indigo-50/95 via-purple-50/50 to-white p-4 rounded-xl border border-indigo-200/90 border-l-4 border-l-indigo-600 shadow-sm hover:shadow-md hover:border-indigo-400 ring-1 ring-indigo-500/10 transition-all flex flex-col gap-2.5">
+          <div className="flex justify-between items-start gap-2">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <Bot size={15} className="text-indigo-600 shrink-0" />
+              <h4 className="font-bold text-indigo-950 text-sm truncate">{evt.summary || 'Agent Flux Consultation'}</h4>
+            </div>
+            <span className="bg-gradient-to-r from-indigo-600 to-violet-600 text-white font-bold text-[10px] uppercase tracking-wider px-2.5 py-0.5 rounded-full shadow-xs flex items-center gap-1 shrink-0">
+              <Sparkles size={11} className="text-amber-300" />
+              Agent Flux
+            </span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-indigo-900/80 font-medium">
+            <div className="flex items-center gap-1.5">
+              <Clock size={13} className="text-indigo-500" />
+              {evt.start?.dateTime ? (
+                isToday(parseISO(evt.start.dateTime)) ? 'Today' : 
+                isTomorrow(parseISO(evt.start.dateTime)) ? 'Tomorrow' : 
+                format(parseISO(evt.start.dateTime), 'MMM d, yyyy')
+              ) : 'All Day'}
+              {evt.start?.dateTime && ` at ${formatEventTime(evt)}`}
+            </div>
+
+            {evt.attendees && evt.attendees.length > 0 && (
+              <div className="flex items-center gap-1.5 text-[11px] text-slate-600">
+                <Users size={12} className="text-indigo-500" />
+                <span className="truncate max-w-[200px]">{evt.attendees.map((a: any) => a.displayName || a.email).join(', ')}</span>
+              </div>
+            )}
+          </div>
+
+          {evt.hangoutLink && (
+            <div className="pt-1 flex items-center justify-between border-t border-indigo-100/70 mt-0.5">
+              <a 
+                href={evt.hangoutLink} 
+                target="_blank" 
+                rel="noopener noreferrer" 
+                className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg shadow-xs transition-colors"
+              >
+                <Video size={13} />
+                Join Google Meet
+              </a>
+              {evt.htmlLink && (
+                <a 
+                  href={evt.htmlLink} 
+                  target="_blank" 
+                  rel="noopener noreferrer" 
+                  className="text-[11px] text-indigo-600 hover:text-indigo-800 font-medium flex items-center gap-1"
+                >
+                  View on Google <ExternalLink size={11} />
+                </a>
+              )}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // Holiday styling
+    if (isHoliday) {
+      return (
+        <div className="bg-rose-50/70 p-4 rounded-xl border border-rose-200/90 border-l-4 border-l-rose-500 shadow-sm hover:shadow-md transition-all flex flex-col gap-2">
+          <div className="flex justify-between items-start gap-2">
+            <h4 className="font-bold text-rose-950 text-sm truncate">{evt.summary || 'Holiday'}</h4>
+            <span className="bg-rose-100 text-rose-700 border border-rose-200 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider shrink-0">
+              Holiday
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5 text-xs text-rose-800/80 font-medium">
+            <Clock size={12} className="text-rose-400" />
+            {evt.start?.dateTime ? format(parseISO(evt.start.dateTime), 'MMM d, yyyy') : 'All Day'}
+          </div>
+        </div>
+      );
+    }
+
+    // Standard styling
+    return (
+      <div className="bg-white p-4 rounded-xl border border-slate-200/80 border-l-4 border-l-slate-400 shadow-sm hover:shadow-md transition-all flex flex-col gap-2">
+        <div className="flex justify-between items-start gap-2">
+          <h4 className="font-bold text-slate-800 text-sm truncate">{evt.summary || 'Untitled Event'}</h4>
+          <span className="bg-slate-100 text-slate-600 border border-slate-200 text-[10px] font-semibold px-2 py-0.5 rounded-full uppercase tracking-wider shrink-0">
+            Standard
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5 text-xs text-slate-500 font-medium">
           <Clock size={12} className="text-slate-400" />
           {evt.start?.dateTime ? (
             isToday(parseISO(evt.start.dateTime)) ? 'Today' : 
@@ -160,8 +270,8 @@ export function GoogleCalendarUI() {
           {evt.start?.dateTime && ` at ${formatEventTime(evt)}`}
         </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <div className="p-6 h-[calc(100vh-64px)] flex flex-col animate-in fade-in duration-500 bg-slate-50/50">
@@ -278,10 +388,79 @@ export function GoogleCalendarUI() {
 
           {/* Categorized Lists */}
           <div className="flex-1 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-            <div className="p-4 border-b border-slate-100 bg-slate-50/50">
-              <h3 className="font-bold text-slate-800 flex items-center gap-2 text-sm">
-                <FileText size={16} className="text-slate-500" /> Upcoming & Categorized Events
-              </h3>
+            <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <h3 className="font-bold text-slate-800 flex items-center gap-2 text-sm">
+                  <FileText size={16} className="text-slate-500" /> Upcoming & Categorized Events
+                </h3>
+
+                {/* Legend indicator */}
+                <div className="flex items-center gap-3 text-[11px] font-medium text-slate-500">
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-full bg-indigo-600"></span>
+                    Agent Flux
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-full bg-slate-400"></span>
+                    Standard
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
+                    Holidays
+                  </span>
+                </div>
+              </div>
+
+              {/* Filter Tabs */}
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setActiveFilter('ALL')}
+                  className={`px-3 py-1 rounded-lg text-xs font-semibold transition-colors ${
+                    activeFilter === 'ALL' 
+                      ? 'bg-slate-900 text-white shadow-xs' 
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  All ({events.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveFilter('AGENT_FLUX')}
+                  className={`px-3 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors ${
+                    activeFilter === 'AGENT_FLUX' 
+                      ? 'bg-indigo-600 text-white shadow-xs' 
+                      : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100'
+                  }`}
+                >
+                  <Sparkles size={11} />
+                  Agent Flux ({categorizedEvents.agentFluxEvents.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveFilter('GENERAL')}
+                  className={`px-3 py-1 rounded-lg text-xs font-semibold transition-colors ${
+                    activeFilter === 'GENERAL' 
+                      ? 'bg-slate-900 text-white shadow-xs' 
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  Standard ({categorizedEvents.generalEvents.length})
+                </button>
+                {categorizedEvents.holidays.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setActiveFilter('HOLIDAYS')}
+                    className={`px-3 py-1 rounded-lg text-xs font-semibold transition-colors ${
+                      activeFilter === 'HOLIDAYS' 
+                        ? 'bg-rose-600 text-white shadow-xs' 
+                        : 'bg-rose-50 text-rose-700 hover:bg-rose-100'
+                    }`}
+                  >
+                    Holidays ({categorizedEvents.holidays.length})
+                  </button>
+                )}
+              </div>
             </div>
             
             <div className="flex-1 overflow-y-auto p-4 space-y-6 custom-scrollbar">
@@ -289,42 +468,53 @@ export function GoogleCalendarUI() {
                 <div className="flex justify-center py-10"><Loader2 className="w-6 h-6 animate-spin text-blue-500" /></div>
               ) : (
                 <>
-                  {categorizedEvents.agentFluxEvents.length > 0 && (
+                  {/* Agent Flux Events Section */}
+                  {(activeFilter === 'ALL' || activeFilter === 'AGENT_FLUX') && categorizedEvents.agentFluxEvents.length > 0 && (
                     <div className="space-y-3">
-                      <h4 className="text-xs font-bold text-emerald-700 uppercase tracking-wider flex items-center gap-1.5">
-                        <CheckCircle2 size={14} /> Fixed by Agent Flux
-                      </h4>
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-xs font-bold text-indigo-700 uppercase tracking-wider flex items-center gap-1.5">
+                          <Zap size={13} className="text-indigo-600" />
+                          ⚡ Automated by Agent Flux
+                        </h4>
+                        <span className="text-[11px] font-semibold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-200/50">
+                          {categorizedEvents.agentFluxEvents.length} scheduled
+                        </span>
+                      </div>
                       <div className="grid gap-3">
                         {categorizedEvents.agentFluxEvents.map(evt => (
-                          <EventCard key={evt.id} evt={evt} badgeColor="bg-emerald-100 text-emerald-700 border-emerald-200" badgeText="Agent Flux" />
+                          <EventCard key={evt.id} evt={evt} />
                         ))}
                       </div>
                     </div>
                   )}
 
-                  {categorizedEvents.holidays.length > 0 && (
+                  {/* Holidays Section */}
+                  {(activeFilter === 'ALL' || activeFilter === 'HOLIDAYS') && categorizedEvents.holidays.length > 0 && (
                     <div className="space-y-3">
                       <h4 className="text-xs font-bold text-rose-700 uppercase tracking-wider">Holidays & Time Off</h4>
                       <div className="grid gap-3">
                         {categorizedEvents.holidays.map(evt => (
-                          <EventCard key={evt.id} evt={evt} badgeColor="bg-rose-100 text-rose-700 border-rose-200" badgeText="Holiday" />
+                          <EventCard key={evt.id} evt={evt} />
                         ))}
                       </div>
                     </div>
                   )}
 
-                  <div className="space-y-3">
-                    <h4 className="text-xs font-bold text-blue-700 uppercase tracking-wider">Other Appointments</h4>
-                    {categorizedEvents.generalEvents.length === 0 ? (
-                      <p className="text-xs text-slate-500 italic">No upcoming appointments found.</p>
-                    ) : (
-                      <div className="grid gap-3">
-                        {categorizedEvents.generalEvents.slice(0, 10).map(evt => (
-                          <EventCard key={evt.id} evt={evt} badgeColor="bg-slate-100 text-slate-600 border-slate-200" badgeText="Standard" />
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                  {/* Standard Appointments Section */}
+                  {(activeFilter === 'ALL' || activeFilter === 'GENERAL') && (
+                    <div className="space-y-3">
+                      <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Other Appointments</h4>
+                      {categorizedEvents.generalEvents.length === 0 ? (
+                        <p className="text-xs text-slate-500 italic">No other appointments found.</p>
+                      ) : (
+                        <div className="grid gap-3">
+                          {categorizedEvents.generalEvents.slice(0, 10).map(evt => (
+                            <EventCard key={evt.id} evt={evt} />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </>
               )}
             </div>
@@ -335,3 +525,4 @@ export function GoogleCalendarUI() {
     </div>
   );
 }
+
