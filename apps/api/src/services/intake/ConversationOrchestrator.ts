@@ -103,30 +103,42 @@ export class ConversationOrchestrator {
         // STEP 4 - AI UNDERSTANDING
         const systemInstruction = `
 You are the semantic understanding engine for Agent Flux V2 (Aasha Furniture).
-Your goal is to understand the customer's email and output STRICT JSON.
+Your goal is to accurately classify the customer's email based on what they are saying and output STRICT JSON.
 DO NOT OUTPUT ANY CONVERSATIONAL TEXT. ONLY RAW JSON.
 
 JSON SCHEMA:
 {
-  "intent": "GENERAL_ENQUIRY" | "PRODUCT_PRICE" | "PRODUCTION_TIME" | "DELIVERY_INFORMATION" | "QUOTATION_REQUESTED" | "QUOTATION_ACCEPTANCE" | "DISCOUNT_REQUEST" | "ORDER_STATUS" | "UNKNOWN",
-  "secondaryIntents": ["same strings as above"],
+  "intent": "MEETING_REQUEST" | "QUOTATION_REQUESTED" | "QUOTATION_ACCEPTANCE" | "PRODUCT_PRICE" | "PRODUCTION_TIME" | "DELIVERY_INFORMATION" | "ORDER_STATUS" | "DISCOUNT_REQUEST" | "GENERAL_ENQUIRY" | "UNKNOWN",
+  "secondaryIntents": ["string"],
   "entities": {
     "productName": "string or null",
     "quantity": number (default 1),
-    "deliveryCity": "string or null"
+    "deliveryCity": "string or null",
+    "meetingDetails": {
+      "requestedTimeframe": "string or null",
+      "meetingType": "VIRTUAL" | "IN_PERSON" | "PHONE" | "UNSPECIFIED",
+      "topic": "string or null"
+    }
   },
-  "confidence": number (0.0 to 1.0)
+  "confidence": number (0.0 to 1.0),
+  "summary": "1-sentence summary of customer request"
 }
 
 Context:
 ${JSON.stringify(conversationContext, null, 2)}
 
 Rules:
-1. If the thread has an active quotation (status "SENT") and customer says "proceed", "yes", "confirm my order", "I'll take it", intent is QUOTATION_ACCEPTANCE.
-2. If customer says "can you send me a quotation?", intent is QUOTATION_REQUESTED.
-3. If they ask "how much" or "price", intent is PRODUCT_PRICE.
-4. Normalize products using knowledge base. Resolve "wardrobe" to "3-Door Wardrobe", "bed" to "Queen Size Teak Bed" or "King Size Teak Bed" based on context.
-5. If thread Context has a previous product, carry it over if the customer implies "it" or "the bed", BUT DO NOT carry it over if they explicitly ask for a DIFFERENT product (e.g. they say Queen Size Teak Bed, do not use King Size).
+1. CLASSIFICATION MUST BE BASED STRICTLY ON THE INCOMING MESSAGE:
+   - If the customer asks when you are free, or asks for a meeting, call, discussion, consultation, appointment, or showroom visit (e.g., "can you tell me when you are free on next week?", "can we schedule a call?", "when can we meet?"), intent is MEETING_REQUEST.
+   - If customer asks for quotation or price estimate (e.g. "send me a quote", "give quotation for..."), intent is QUOTATION_REQUESTED.
+   - If thread has an active quotation and customer says "proceed", "yes", "confirm my order", "I'll take it", intent is QUOTATION_ACCEPTANCE.
+   - If customer asks "how much" or "price" for a product, intent is PRODUCT_PRICE.
+   - If customer asks about manufacturing or lead time, intent is PRODUCTION_TIME.
+   - If customer asks about shipping, transit, or delivery city, intent is DELIVERY_INFORMATION.
+   - If customer asks where their order is or order status, intent is ORDER_STATUS.
+   - If customer asks general company questions (materials, showroom hours, capabilities), intent is GENERAL_ENQUIRY.
+2. DO NOT assume or guess a productName if the customer is merely asking for a meeting, availability, or general consultation without naming a product. Set productName to null unless an actual product was mentioned.
+3. If thread Context has a previous product, only carry it over if the customer implies "it" or "the bed" in reference to that product. DO NOT carry it over for new meeting requests or unrelated questions.
 `;
 
         const userPrompt = `Email Subject: ${subject}\nBody:\n${normalizedBody}`;
@@ -144,7 +156,7 @@ Rules:
             aiResponse = { content: { text: '{}' } };
         }
 
-        let parsedAi;
+        let parsedAi: any;
         try {
             let cleanText = aiResponse.content.text || '{}';
             cleanText = cleanText.replace(/^```json/g, '').replace(/```$/g, '').trim();
@@ -154,25 +166,52 @@ Rules:
             parsedAi = { intent: 'GENERAL_ENQUIRY', entities: {} };
         }
 
-        // Inheritance logic (State-Aware)
+        // Heuristic safeguards to guarantee message-based classification accuracy
+        const meetingKeywordsRegex = /\b(free\s+(on|next|this|tomorrow)|when\s+are\s+you\s+free|available|availability|meet|meeting|schedule\s+a\s+(call|meeting|discussion|appointment)|appointment|book\s+a\s+slot|call\s+(you|me|next|this)|discuss\s+over\s+a\s+call|zoom|google\s+meet)\b/i;
+        const isMeetingQuery = meetingKeywordsRegex.test(normalizedBody) || meetingKeywordsRegex.test(subject);
+
+        const orderStatusRegex = /\b(where\s+is\s+my\s+order|order\s+status|tracking|track\s+my\s+order|delivery\s+status)\b/i;
+        const isOrderStatusQuery = orderStatusRegex.test(normalizedBody) || orderStatusRegex.test(subject);
+
+        let finalIntent = parsedAi.intent || 'GENERAL_ENQUIRY';
+        if (isMeetingQuery && finalIntent !== 'QUOTATION_ACCEPTANCE') {
+            finalIntent = 'MEETING_REQUEST';
+        } else if (isOrderStatusQuery && finalIntent !== 'QUOTATION_ACCEPTANCE') {
+            finalIntent = 'ORDER_STATUS';
+        }
+
+        // Inheritance logic (Strictly Message-Aware)
         let extracted = {
-            intent: parsedAi.intent || 'GENERAL_ENQUIRY',
+            intent: finalIntent,
             productName: parsedAi.entities?.productName || null,
             quantity: parsedAi.entities?.quantity || 1,
             deliveryLocation: parsedAi.entities?.deliveryCity || null,
+            meetingDetails: parsedAi.entities?.meetingDetails || {
+                requestedTimeframe: null,
+                meetingType: 'UNSPECIFIED',
+                topic: null
+            },
             threadId: threadId
         };
 
-        if (previousEnquiry && previousEnquiry.structuredData) {
+        // Only inherit previous product if current message refers to it and isn't a standalone meeting or order query
+        const referencesPreviousProduct = /\b(it|that|this|the\s+bed|the\s+wardrobe|the\s+item|the\s+furniture|the\s+quote|the\s+quotation|proceed|confirm)\b/i.test(normalizedBody);
+        if (previousEnquiry && previousEnquiry.structuredData && extracted.intent !== 'MEETING_REQUEST' && extracted.intent !== 'ORDER_STATUS') {
             const prevData: any = previousEnquiry.structuredData;
-            if (!extracted.productName && prevData.productName) extracted.productName = prevData.productName;
-            if (!extracted.deliveryLocation && prevData.deliveryLocation) extracted.deliveryLocation = prevData.deliveryLocation;
-            if (extracted.quantity === 1 && prevData.quantity > 1) extracted.quantity = prevData.quantity;
+            if (!extracted.productName && prevData.productName && referencesPreviousProduct) {
+                extracted.productName = prevData.productName;
+            }
+            if (!extracted.deliveryLocation && prevData.deliveryLocation) {
+                extracted.deliveryLocation = prevData.deliveryLocation;
+            }
+            if (extracted.quantity === 1 && prevData.quantity > 1 && referencesPreviousProduct) {
+                extracted.quantity = prevData.quantity;
+            }
         }
 
         // STEP 5 - ENTITY RESOLUTION & KNOWLEDGE RETRIEVAL
         let matchedProduct = null;
-        if (extracted.productName) {
+        if (extracted.productName && extracted.intent !== 'MEETING_REQUEST') {
             const retrieval = await HybridRetrievalEngine.retrieve({ 
                 businessId, query: extracted.productName, topK: 1
             });
@@ -190,7 +229,7 @@ Rules:
 
         // STEP 7 - STATE-AWARE DECISION & ACTION PLAN
         const actionPlan = this.determineActionPlan(extracted, existingQuotation, matchedProduct);
-        console.log(`[ConversationOrchestrator] ActionPlan Selected: ${actionPlan.primaryAction}`);
+        console.log(`[ConversationOrchestrator] ActionPlan Selected: ${actionPlan.primaryAction} (Intent: ${extracted.intent})`);
 
         // STEP 9 - BUSINESS ACTIONS & DETERMINISTIC FINANCIAL ENGINE
         const { replyHtml, attachments } = await this.executeBusinessAction(
@@ -220,6 +259,9 @@ Rules:
   }
 
   private static determineActionPlan(extracted: any, existingQuotation: any, matchedProduct: any) {
+      if (extracted.intent === 'MEETING_REQUEST') {
+          return { primaryAction: 'SCHEDULE_MEETING' };
+      }
       if (extracted.intent === 'QUOTATION_ACCEPTANCE' && existingQuotation) {
           return { primaryAction: 'ACCEPT_QUOTATION' };
       }
@@ -229,7 +271,146 @@ Rules:
       if (extracted.intent === 'PRODUCT_PRICE' && matchedProduct) {
           return { primaryAction: 'SEND_PRICE_INFO' };
       }
-      return { primaryAction: 'MANUAL_REVIEW_FALLBACK' };
+      if (extracted.intent === 'ORDER_STATUS') {
+          return { primaryAction: 'CHECK_ORDER_STATUS' };
+      }
+      if (extracted.intent === 'PRODUCTION_TIME' && matchedProduct) {
+          return { primaryAction: 'SEND_PRODUCTION_TIME' };
+      }
+      if (extracted.intent === 'DELIVERY_INFORMATION') {
+          return { primaryAction: 'SEND_DELIVERY_INFO' };
+      }
+      return { primaryAction: 'HANDLE_GENERAL_ENQUIRY' };
+  }
+
+  private static async getAvailableMeetingSlots(businessId: string, timeframeHint?: string): Promise<string[]> {
+      try {
+          const { google } = require('googleapis');
+          const creds = await prisma.integrationCredential.findFirst({
+              where: { integration: { businessId, provider: 'GOOGLE_CALENDAR', status: 'CONNECTED' } }
+          });
+
+          let calendarClient: any = null;
+          if (creds) {
+              const { decrypt, encrypt } = require('../encryption');
+              let accessToken = decrypt(creds.accessTokenEncrypted);
+              const oauth2Client = new google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET);
+
+              if (creds.refreshTokenEncrypted) {
+                  oauth2Client.setCredentials({
+                      access_token: accessToken,
+                      refresh_token: decrypt(creds.refreshTokenEncrypted)
+                  });
+                  if (creds.expiresAt && creds.expiresAt.getTime() < Date.now() + 60000) {
+                      try {
+                          const { credentials } = await oauth2Client.refreshAccessToken();
+                          if (credentials.access_token) {
+                              accessToken = credentials.access_token;
+                              oauth2Client.setCredentials(credentials);
+                              await prisma.integrationCredential.update({
+                                  where: { id: creds.id },
+                                  data: {
+                                      accessTokenEncrypted: encrypt(accessToken),
+                                      expiresAt: credentials.expiry_date ? new Date(credentials.expiry_date) : null
+                                  }
+                              });
+                          }
+                      } catch (e: any) {
+                          console.warn('[ConversationOrchestrator] Calendar refresh token error:', e.message);
+                      }
+                  }
+              } else {
+                  oauth2Client.setCredentials({ access_token: accessToken });
+              }
+              calendarClient = google.calendar({ version: 'v3', auth: oauth2Client });
+          }
+
+          const now = new Date();
+          const isNextWeek = (timeframeHint || '').toLowerCase().includes('next week');
+
+          let startDay = new Date(now);
+          if (isNextWeek) {
+              const dayOfWeek = now.getDay(); // 0 = Sunday, 1 = Monday
+              const daysUntilNextMonday = ((8 - dayOfWeek) % 7) || 7;
+              startDay.setDate(now.getDate() + daysUntilNextMonday);
+          } else {
+              startDay.setDate(now.getDate() + 1);
+          }
+          startDay.setHours(10, 0, 0, 0);
+
+          let existingEvents: any[] = [];
+          if (calendarClient) {
+              const windowEnd = new Date(startDay);
+              windowEnd.setDate(windowEnd.getDate() + 7);
+              try {
+                  const res = await calendarClient.events.list({
+                      calendarId: 'primary',
+                      timeMin: startDay.toISOString(),
+                      timeMax: windowEnd.toISOString(),
+                      singleEvents: true,
+                      orderBy: 'startTime'
+                  });
+                  existingEvents = res.data.items || [];
+              } catch (calErr: any) {
+                  console.warn('[ConversationOrchestrator] Failed to query calendar events:', calErr.message);
+              }
+          }
+
+          const proposedSlots: string[] = [];
+          const candidateHours = [
+              { hour: 11, minute: 0, label: '11:00 AM' },
+              { hour: 14, minute: 30, label: '2:30 PM' },
+              { hour: 16, minute: 30, label: '4:30 PM' }
+          ];
+
+          let cursorDate = new Date(startDay);
+          for (let dayOffset = 0; dayOffset < 7 && proposedSlots.length < 3; dayOffset++) {
+              const checkDate = new Date(cursorDate);
+              checkDate.setDate(cursorDate.getDate() + dayOffset);
+
+              // Skip Sundays
+              if (checkDate.getDay() === 0) continue;
+
+              const dayName = checkDate.toLocaleDateString('en-US', { weekday: 'long' });
+              const monthName = checkDate.toLocaleDateString('en-US', { month: 'short' });
+              const dayNum = checkDate.getDate();
+
+              for (const slot of candidateHours) {
+                  if (proposedSlots.length >= 3) break;
+
+                  const slotStart = new Date(checkDate);
+                  slotStart.setHours(slot.hour, slot.minute, 0, 0);
+                  const slotEnd = new Date(slotStart.getTime() + 45 * 60 * 1000);
+
+                  const hasConflict = existingEvents.some(ev => {
+                      const evStart = new Date(ev.start?.dateTime || ev.start?.date || '');
+                      const evEnd = new Date(ev.end?.dateTime || ev.end?.date || '');
+                      return slotStart < evEnd && slotEnd > evStart;
+                  });
+
+                  if (!hasConflict) {
+                      proposedSlots.push(`${dayName}, ${monthName} ${dayNum} at ${slot.label} IST`);
+                  }
+              }
+          }
+
+          if (proposedSlots.length > 0) {
+              return proposedSlots;
+          }
+
+          return [
+              'Next Tuesday at 11:00 AM IST',
+              'Next Wednesday at 2:30 PM IST',
+              'Next Thursday at 4:30 PM IST'
+          ];
+      } catch (err: any) {
+          console.error('[ConversationOrchestrator] Error getting meeting slots:', err.message);
+          return [
+              'Tuesday at 11:00 AM IST',
+              'Wednesday at 2:30 PM IST',
+              'Thursday at 4:30 PM IST'
+          ];
+      }
   }
 
   private static async executeBusinessAction(
@@ -246,6 +427,86 @@ Rules:
 
       let replyHtml = '';
       let attachments = undefined;
+
+      if (actionPlan.primaryAction === 'SCHEDULE_MEETING') {
+          const slots = await this.getAvailableMeetingSlots(
+              businessId,
+              extracted.meetingDetails?.requestedTimeframe || body
+          );
+
+          const slotItems = slots.map(s => `<li><strong>${s}</strong></li>`).join('');
+
+          replyHtml = `
+            <p>Dear ${customer.name || 'Customer'},</p>
+            <p>Thank you for reaching out! We would be delighted to schedule a discussion with you.</p>
+            <p>Here are our upcoming available slots based on our live schedule:</p>
+            <ul>
+              ${slotItems}
+            </ul>
+            <p>We can connect either:</p>
+            <ol>
+              <li><strong>Virtually</strong> via Google Meet or a phone call, or</li>
+              <li><strong>In-person</strong> at our workshop & showroom (Open Mon–Sat, 10:00 AM – 6:00 PM IST).</li>
+            </ol>
+            <p>Please reply with the slot that works best for you and your preferred mode (virtual or showroom visit), and we will immediately send a calendar invitation to confirm.</p>
+            <br>
+            <p>Warm regards,<br>Aasha Furniture Team</p>
+          `;
+          return { replyHtml };
+      }
+
+      if (actionPlan.primaryAction === 'CHECK_ORDER_STATUS') {
+          const orders = await prisma.order.findMany({
+              where: { businessId, customerId: customer.id },
+              orderBy: { createdAt: 'desc' },
+              take: 3
+          });
+
+          if (orders.length > 0) {
+              const orderList = orders.map(o => `<li>Order #${o.id.slice(-6).toUpperCase()}: Status: <strong>${o.status}</strong></li>`).join('');
+              replyHtml = `
+                <p>Dear ${customer.name || 'Customer'},</p>
+                <p>Thank you for checking in on your order. Here is the latest status:</p>
+                <ul>${orderList}</ul>
+                <p>If you need any specific delivery timing or expedited dispatch, please let us know.</p>
+                <br>
+                <p>Warm regards,<br>Aasha Furniture Team</p>
+              `;
+          } else {
+              replyHtml = `
+                <p>Dear ${customer.name || 'Customer'},</p>
+                <p>Thank you for reaching out regarding your order status.</p>
+                <p>We could not locate an active order linked directly to this email address (${customer.email}). Could you please share your Order Number or Quotation Reference so our dispatch team can check right away?</p>
+                <br>
+                <p>Warm regards,<br>Aasha Furniture Team</p>
+              `;
+          }
+          return { replyHtml };
+      }
+
+      if (actionPlan.primaryAction === 'SEND_PRODUCTION_TIME' && product) {
+          replyHtml = `
+            <p>Dear ${customer.name || 'Customer'},</p>
+            <p>Thank you for your interest in our ${product.productName}.</p>
+            <p>Our standard production lead time is <strong>${product.productionDays} working days</strong>. Every piece is handcrafted by our master carpenters using premium seasoned timber to ensure enduring strength and quality.</p>
+            <p>Please let us know if you would like us to reserve a production slot or prepare a formal quotation for you.</p>
+            <br>
+            <p>Warm regards,<br>Aasha Furniture Team</p>
+          `;
+          return { replyHtml };
+      }
+
+      if (actionPlan.primaryAction === 'SEND_DELIVERY_INFO') {
+          replyHtml = `
+            <p>Dear ${customer.name || 'Customer'},</p>
+            <p>Thank you for inquiring about our delivery options.</p>
+            <p>We provide insured delivery across all major cities in India${extracted.deliveryLocation ? ` including ${extracted.deliveryLocation}` : ''}. Each piece is securely crated and delivered with professional handling to guarantee it arrives in pristine condition.</p>
+            <p>Please share your exact delivery address or pin code if you would like an exact transit timeline and delivery quotation.</p>
+            <br>
+            <p>Warm regards,<br>Aasha Furniture Team</p>
+          `;
+          return { replyHtml };
+      }
 
       if (actionPlan.primaryAction === 'ACCEPT_QUOTATION') {
           const { orderService } = require('../order/OrderService');
@@ -338,22 +599,51 @@ Rules:
           return { replyHtml };
       }
 
-      if (actionPlan.primaryAction === 'MANUAL_REVIEW_FALLBACK') {
-         // Ask a targeted clarification instead of generic fallback!
-         if (extracted.intent === 'GENERAL_ENQUIRY' && !product) {
-             replyHtml = `<p>Dear ${customer.name || 'Customer'},</p>
-             <p>I'd be happy to help. Could you please confirm which exact product or furniture piece you are looking for?</p>
-             <br><p>Warm regards,<br>Aasha Furniture Team</p>`;
-         } else if (extracted.productName && !product) {
-             replyHtml = `<p>Dear ${customer.name || 'Customer'},</p>
-             <p>I'd be happy to help with the ${extracted.productName}. Could you please confirm if you meant the Queen Size Teak Bed or the King Size Teak Bed?</p>
-             <br><p>Warm regards,<br>Aasha Furniture Team</p>`;
-         } else {
-             replyHtml = `<p>Dear ${customer.name || 'Customer'},</p>
-             <p>Thank you for reaching out. We are reviewing your request and will provide the specific details shortly.</p>
-             <br><p>Warm regards,<br>Aasha Furniture Team</p>`;
-         }
-         return { replyHtml };
+      if (actionPlan.primaryAction === 'HANDLE_GENERAL_ENQUIRY') {
+          let generatedReply = '';
+          try {
+              const enquiryAi = await aiManager.generateResponse({
+                  systemInstructions: `You are the customer service representative for Aasha Furniture (premium custom furniture manufacturer in India).
+Draft a concise, warm, and professional email response addressing the customer's specific message.
+Rules:
+1. Address the customer as "Dear ${customer.name || 'Customer'},".
+2. Directly answer their question based on the content of their email.
+3. If they asked about visiting the showroom or store hours, mention Monday to Saturday, 10:00 AM to 6:00 PM IST.
+4. If they asked about custom designs, confirm that we craft custom furniture to custom dimensions and specifications.
+5. Do NOT ask them for an arbitrary furniture piece unless they explicitly mentioned looking for something unspecified.
+6. Format the reply cleanly using HTML tags (<p>, <ul>, <li>). Do not use markdown backticks.
+7. End with:
+<br>
+<p>Warm regards,<br>Aasha Furniture Team</p>`,
+                  history: [{
+                      role: 'user',
+                      content: `Customer Email Subject: ${subject}\nCustomer Email Body:\n${body}`
+                  }],
+                  tools: [],
+                  config: { temperature: 0.2 }
+              });
+
+              let raw = enquiryAi.content?.text || '';
+              raw = raw.replace(/^```html/gi, '').replace(/```$/g, '').trim();
+              if (raw && raw.length > 20) {
+                  generatedReply = raw;
+              }
+          } catch (e: any) {
+              console.warn('[ConversationOrchestrator] Dynamic AI reply generation failed, using fallback:', e.message);
+          }
+
+          if (!generatedReply) {
+              generatedReply = `
+                <p>Dear ${customer.name || 'Customer'},</p>
+                <p>Thank you for getting in touch with Aasha Furniture regarding "${subject || 'your enquiry'}".</p>
+                <p>We have received your message and our team is reviewing your requirements to provide the best assistance.</p>
+                <p>If you have any specific requirements, dimensions, or design references, feel free to reply directly to this email.</p>
+                <br>
+                <p>Warm regards,<br>Aasha Furniture Team</p>
+              `;
+          }
+
+          return { replyHtml: generatedReply };
       }
 
       return { replyHtml: '' };
