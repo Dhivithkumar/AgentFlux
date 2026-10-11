@@ -62,17 +62,31 @@ export class ConversationOrchestrator {
         const recentEnquiries = await prisma.enquiry.findMany({
             where: { businessId, customerId: customer.id, source: 'EMAIL' },
             orderBy: { createdAt: 'desc' },
-            take: 10
+            take: 25
         });
         
-        const previousEnquiry = recentEnquiries.find((enq: any) => 
+        const threadEnquiries = recentEnquiries.filter((enq: any) => 
             enq.structuredData && (enq.structuredData as any).threadId === threadId
+        );
+        const previousEnquiry = threadEnquiries[0] || null;
+        const previousProductEnquiry = threadEnquiries.find((enq: any) => 
+            enq.structuredData && (enq.structuredData as any).productName
         ) || null;
 
         const existingQuotation = await prisma.quotation.findFirst({
             where: { businessId, customerId: customer.id, gmailThreadId: threadId } as any,
             orderBy: { createdAt: 'desc' }
         });
+
+        let quotationProductName: string | null = null;
+        if (existingQuotation && existingQuotation.lineItems) {
+            try {
+                const items = Array.isArray(existingQuotation.lineItems) ? existingQuotation.lineItems : JSON.parse(existingQuotation.lineItems as any);
+                if (items && items[0]) {
+                    quotationProductName = items[0].description || items[0].productName || null;
+                }
+            } catch (e) {}
+        }
 
         const activeOrder = existingQuotation ? await prisma.order.findFirst({
             where: { businessId, quotationId: existingQuotation.id } as any
@@ -82,17 +96,18 @@ export class ConversationOrchestrator {
         const productDocs = await knowledgeService.searchKnowledgeBase({
              businessId, query: 'product catalogue list', topK: 5
         });
-        const taxDocs = await knowledgeService.searchKnowledgeBase({
-             businessId, query: 'tax rate gst', topK: 1
-        });
 
         const conversationContext = {
             businessContext: { 
-                taxInfo: taxDocs.length > 0 ? taxDocs[0].content : '18% GST default',
+                taxInfo: 'Standard 18% GST applicable on all furniture products',
                 currency: 'INR'
             },
             customerContext: { name: customer.name, email: customer.email },
-            threadContext: { threadId, previousEnquiryData: previousEnquiry?.structuredData },
+            threadContext: { 
+                threadId, 
+                previousEnquiryData: previousProductEnquiry?.structuredData || previousEnquiry?.structuredData,
+                quotedProduct: quotationProductName
+            },
             activeObjects: {
                 quotationStatus: existingQuotation ? existingQuotation.status : null,
                 orderStatus: activeOrder ? activeOrder.status : null
@@ -130,7 +145,7 @@ ${JSON.stringify(conversationContext, null, 2)}
 Rules:
 1. CLASSIFICATION MUST BE BASED STRICTLY ON THE INCOMING MESSAGE:
    - If the customer asks when you are free, or asks for a meeting, call, discussion, consultation, appointment, or showroom visit (e.g., "can you tell me when you are free on next week?", "can we schedule a call?", "when can we meet?"), intent is MEETING_REQUEST.
-   - If customer asks for quotation or price estimate (e.g. "send me a quote", "give quotation for..."), intent is QUOTATION_REQUESTED.
+   - If customer asks for quotation or price estimate (e.g. "send me a quote", "send me quotation", "give quotation for..."), intent is QUOTATION_REQUESTED.
    - If thread has an active quotation and customer says "proceed", "yes", "confirm my order", "I'll take it", intent is QUOTATION_ACCEPTANCE.
    - If customer asks "how much" or "price" for a product, intent is PRODUCT_PRICE.
    - If customer asks about manufacturing or lead time, intent is PRODUCTION_TIME.
@@ -138,7 +153,10 @@ Rules:
    - If customer asks where their order is or order status, intent is ORDER_STATUS.
    - If customer asks general company questions (materials, showroom hours, capabilities), intent is GENERAL_ENQUIRY.
 2. DO NOT assume or guess a productName if the customer is merely asking for a meeting, availability, or general consultation without naming a product. Set productName to null unless an actual product was mentioned.
-3. If thread Context has a previous product, only carry it over if the customer implies "it" or "the bed" in reference to that product. DO NOT carry it over for new meeting requests or unrelated questions.
+3. THREAD CONTEXT & PRODUCT INHERITANCE:
+   - If thread Context has a previous enquiry with a product (e.g., "3-Door Wardrobe", "Queen Size Teak Bed") and the customer in this reply asks for a quotation, price, discount, lead time, or confirms/proceeds (e.g., "send me quotation", "quote please", "proceed", "yes", "confirm", "how much"), YOU MUST inherit and output that previous product in entities.productName.
+   - Only leave productName null if this is a brand new standalone query without any product in the thread.
+   - Do NOT inherit productName if the customer explicitly mentions a DIFFERENT product.
 `;
 
         const userPrompt = `Email Subject: ${subject}\nBody:\n${normalizedBody}`;
@@ -167,17 +185,25 @@ Rules:
         }
 
         // Heuristic safeguards to guarantee message-based classification accuracy
+        const isReply = (subject || '').trim().toLowerCase().startsWith('re:');
+        const subjectToCheck = isReply ? '' : subject;
+
         const meetingKeywordsRegex = /\b(free\s+(on|next|this|tomorrow)|when\s+are\s+you\s+free|available|availability|meet|meeting|schedule\s+a\s+(call|meeting|discussion|appointment)|appointment|book\s+a\s+slot|call\s+(you|me|next|this)|discuss\s+over\s+a\s+call|zoom|google\s+meet)\b/i;
-        const isMeetingQuery = meetingKeywordsRegex.test(normalizedBody) || meetingKeywordsRegex.test(subject);
+        const isMeetingQuery = meetingKeywordsRegex.test(normalizedBody) || (subjectToCheck && meetingKeywordsRegex.test(subjectToCheck));
 
         const orderStatusRegex = /\b(where\s+is\s+my\s+order|order\s+status|tracking|track\s+my\s+order|delivery\s+status)\b/i;
-        const isOrderStatusQuery = orderStatusRegex.test(normalizedBody) || orderStatusRegex.test(subject);
+        const isOrderStatusQuery = orderStatusRegex.test(normalizedBody) || (subjectToCheck && orderStatusRegex.test(subjectToCheck));
+
+        const quotationKeywordsRegex = /\b(send\s+(me\s+)?(a\s+)?quote|send\s+(me\s+)?(the\s+)?quotation|quote\s+please|quotation\s+please|share\s+(the\s+)?quotation|prepare\s+(the\s+)?quotation|quotation|quote|estimate)\b/i;
+        const isQuotationQuery = quotationKeywordsRegex.test(normalizedBody) || (subjectToCheck && quotationKeywordsRegex.test(subjectToCheck));
 
         let finalIntent = parsedAi.intent || 'GENERAL_ENQUIRY';
         if (isMeetingQuery && finalIntent !== 'QUOTATION_ACCEPTANCE') {
             finalIntent = 'MEETING_REQUEST';
         } else if (isOrderStatusQuery && finalIntent !== 'QUOTATION_ACCEPTANCE') {
             finalIntent = 'ORDER_STATUS';
+        } else if (isQuotationQuery && finalIntent !== 'QUOTATION_ACCEPTANCE') {
+            finalIntent = 'QUOTATION_REQUESTED';
         }
 
         // Inheritance logic (Strictly Message-Aware)
@@ -194,17 +220,24 @@ Rules:
             threadId: threadId
         };
 
-        // Only inherit previous product if current message refers to it and isn't a standalone meeting or order query
-        const referencesPreviousProduct = /\b(it|that|this|the\s+bed|the\s+wardrobe|the\s+item|the\s+furniture|the\s+quote|the\s+quotation|proceed|confirm)\b/i.test(normalizedBody);
-        if (previousEnquiry && previousEnquiry.structuredData && extracted.intent !== 'MEETING_REQUEST' && extracted.intent !== 'ORDER_STATUS') {
-            const prevData: any = previousEnquiry.structuredData;
-            if (!extracted.productName && prevData.productName && referencesPreviousProduct) {
-                extracted.productName = prevData.productName;
+        // When replying in the same thread asking for a quotation/price/confirmation, carry over previous product
+        const referencesPreviousProduct = /\b(it|that|this|the\s+bed|the\s+wardrobe|the\s+item|the\s+furniture|the\s+quote|the\s+quotation|quote|quotation|proceed|confirm|order|send|yes|ok|okay)\b/i.test(normalizedBody);
+        const isProductActionIntent = ['QUOTATION_REQUESTED', 'QUOTATION_ACCEPTANCE', 'PRODUCT_PRICE', 'PRODUCTION_TIME', 'DISCOUNT_REQUEST'].includes(finalIntent);
+
+        const threadProduct = (previousProductEnquiry?.structuredData as any)?.productName || quotationProductName;
+
+        if (threadProduct && finalIntent !== 'MEETING_REQUEST' && finalIntent !== 'ORDER_STATUS') {
+            if (!extracted.productName && (isProductActionIntent || referencesPreviousProduct)) {
+                extracted.productName = threadProduct;
             }
+        }
+
+        if (previousEnquiry && previousEnquiry.structuredData) {
+            const prevData: any = previousEnquiry.structuredData;
             if (!extracted.deliveryLocation && prevData.deliveryLocation) {
                 extracted.deliveryLocation = prevData.deliveryLocation;
             }
-            if (extracted.quantity === 1 && prevData.quantity > 1 && referencesPreviousProduct) {
+            if (extracted.quantity === 1 && prevData.quantity > 1) {
                 extracted.quantity = prevData.quantity;
             }
         }
@@ -521,6 +554,34 @@ Rules:
       }
   }
 
+  private static async getTaxRate(businessId: string): Promise<number> {
+      try {
+          const business = await prisma.business.findUnique({
+              where: { id: businessId }
+          });
+          const prefTax = (business as any)?.defaultTaxRate ?? (business?.preferences as any)?.defaultTaxRate;
+          if (prefTax !== undefined && prefTax !== null && !isNaN(Number(prefTax)) && Number(prefTax) > 0) {
+              return Number(prefTax);
+          }
+
+          const { knowledgeService } = require('../knowledge');
+          const docs = await knowledgeService.searchKnowledgeBase({ businessId, query: 'tax rate gst percentage', topK: 3 });
+          for (const doc of docs) {
+              const content = doc.content || '';
+              const match = content.match(/(\d+)\s*%\s*(?:gst|tax)/i) || content.match(/(?:gst|tax)[^\d\n\r]{0,15}(\d+)\s*%/i);
+              if (match) {
+                  const parsedRate = parseFloat(match[1]);
+                  if (parsedRate >= 5 && parsedRate <= 50) {
+                      return parsedRate;
+                  }
+              }
+          }
+      } catch (e: any) {
+          console.warn('[ConversationOrchestrator] Error getting tax rate:', e.message);
+      }
+      return 18; // Default standard 18% GST for furniture
+  }
+
   private static async executeBusinessAction(
       actionPlan: any, businessId: string, customer: any, threadId: string, messageId: string,
       extracted: any, product: any, body: string, subject: string, existingQuotation: any
@@ -644,10 +705,9 @@ Rules:
       }
 
       if (actionPlan.primaryAction === 'CREATE_QUOTATION') {
+          const taxRate = await this.getTaxRate(businessId);
+
           if (!existingQuotation) {
-              const taxMatch = (await require('../knowledge').knowledgeService.searchKnowledgeBase({businessId, query:'tax rate', topK:1}))[0]?.content || '18';
-              const taxRate = parseFloat(taxMatch.match(/(\d+)/)?.[0] || '18');
-              
               const lineItems = [{
                   sku: product.sku, description: product.productName,
                   quantity: extracted.quantity, unitPrice: product.basePrice,
@@ -670,9 +730,6 @@ Rules:
               await quotationService.updateStatus(businessId, existingQuotation.id, 'SENT', 'system');
           }
 
-          const taxRateMatch = (await require('../knowledge').knowledgeService.searchKnowledgeBase({businessId, query:'tax rate', topK:1}))[0]?.content || '18';
-          const taxRate = parseFloat(taxRateMatch.match(/(\d+)/)?.[0] || '18');
-          
           const subtotal = product.basePrice * extracted.quantity;
           const tax = subtotal * (taxRate / 100);
           const total = subtotal + tax;
@@ -683,7 +740,7 @@ Rules:
             <p>Please find attached the formal quotation for your ${product.productName}.</p>
             <p>Quantity: ${extracted.quantity}<br>
             Base Price: ₹${product.basePrice.toLocaleString('en-IN')}<br>
-            GST: ₹${tax.toLocaleString('en-IN')}<br>
+            GST (${taxRate}%): ₹${tax.toLocaleString('en-IN')}<br>
             Total: ₹${total.toLocaleString('en-IN')}</p>
             <p>Please review the attached quotation and let us know if you would like to proceed.</p>
             <br>
@@ -693,8 +750,7 @@ Rules:
       }
 
       if (actionPlan.primaryAction === 'SEND_PRICE_INFO') {
-          const taxRateMatch = (await require('../knowledge').knowledgeService.searchKnowledgeBase({businessId, query:'tax rate', topK:1}))[0]?.content || '18';
-          const taxRate = parseFloat(taxRateMatch.match(/(\d+)/)?.[0] || '18');
+          const taxRate = await this.getTaxRate(businessId);
 
           const subtotal = product.basePrice * extracted.quantity;
           const tax = subtotal * (taxRate / 100);
