@@ -283,7 +283,7 @@ Rules:
       return { primaryAction: 'HANDLE_GENERAL_ENQUIRY' };
   }
 
-  private static async getAvailableMeetingSlots(businessId: string, timeframeHint?: string): Promise<string[]> {
+  private static async getAvailableMeetingSlots(businessId: string, timeframeHint?: string): Promise<{ slotLabel: string; startIso: string; endIso: string }[]> {
       try {
           const { google } = require('googleapis');
           const creds = await prisma.integrationCredential.findFirst({
@@ -356,12 +356,14 @@ Rules:
               }
           }
 
-          const proposedSlots: string[] = [];
+          const proposedSlots: { slotLabel: string; startIso: string; endIso: string }[] = [];
           const candidateHours = [
               { hour: 11, minute: 0, label: '11:00 AM' },
               { hour: 14, minute: 30, label: '2:30 PM' },
               { hour: 16, minute: 30, label: '4:30 PM' }
           ];
+
+          const pad = (n: number) => String(n).padStart(2, '0');
 
           let cursorDate = new Date(startDay);
           for (let dayOffset = 0; dayOffset < 7 && proposedSlots.length < 3; dayOffset++) {
@@ -374,22 +376,33 @@ Rules:
               const dayName = checkDate.toLocaleDateString('en-US', { weekday: 'long' });
               const monthName = checkDate.toLocaleDateString('en-US', { month: 'short' });
               const dayNum = checkDate.getDate();
+              const year = checkDate.getFullYear();
+              const month = pad(checkDate.getMonth() + 1);
+              const dayStr = pad(dayNum);
 
               for (const slot of candidateHours) {
                   if (proposedSlots.length >= 3) break;
 
-                  const slotStart = new Date(checkDate);
-                  slotStart.setHours(slot.hour, slot.minute, 0, 0);
-                  const slotEnd = new Date(slotStart.getTime() + 45 * 60 * 1000);
+                  const startIso = `${year}-${month}-${dayStr}T${pad(slot.hour)}:${pad(slot.minute)}:00+05:30`;
+                  const endHour = slot.hour + Math.floor((slot.minute + 45) / 60);
+                  const endMinute = (slot.minute + 45) % 60;
+                  const endIso = `${year}-${month}-${dayStr}T${pad(endHour)}:${pad(endMinute)}:00+05:30`;
+
+                  const slotStartUtc = new Date(startIso);
+                  const slotEndUtc = new Date(endIso);
 
                   const hasConflict = existingEvents.some(ev => {
                       const evStart = new Date(ev.start?.dateTime || ev.start?.date || '');
                       const evEnd = new Date(ev.end?.dateTime || ev.end?.date || '');
-                      return slotStart < evEnd && slotEnd > evStart;
+                      return slotStartUtc < evEnd && slotEndUtc > evStart;
                   });
 
                   if (!hasConflict) {
-                      proposedSlots.push(`${dayName}, ${monthName} ${dayNum} at ${slot.label} IST`);
+                      proposedSlots.push({
+                          slotLabel: `${dayName}, ${monthName} ${dayNum} at ${slot.label} IST`,
+                          startIso,
+                          endIso
+                      });
                   }
               }
           }
@@ -398,18 +411,112 @@ Rules:
               return proposedSlots;
           }
 
+          // Fallback if no free slot found
           return [
-              'Next Tuesday at 11:00 AM IST',
-              'Next Wednesday at 2:30 PM IST',
-              'Next Thursday at 4:30 PM IST'
+              {
+                  slotLabel: 'Next Monday at 11:00 AM IST',
+                  startIso: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
+                  endIso: new Date(Date.now() + 24 * 3600 * 1000 + 45 * 60 * 1000).toISOString()
+              }
           ];
       } catch (err: any) {
           console.error('[ConversationOrchestrator] Error getting meeting slots:', err.message);
           return [
-              'Tuesday at 11:00 AM IST',
-              'Wednesday at 2:30 PM IST',
-              'Thursday at 4:30 PM IST'
+              {
+                  slotLabel: 'Next Monday at 11:00 AM IST',
+                  startIso: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
+                  endIso: new Date(Date.now() + 24 * 3600 * 1000 + 45 * 60 * 1000).toISOString()
+              }
           ];
+      }
+  }
+
+  private static async bookGoogleCalendarMeeting(
+      businessId: string,
+      customer: any,
+      slot: { slotLabel: string; startIso: string; endIso: string },
+      topic?: string
+  ): Promise<{ success: boolean; eventId?: string; meetLink?: string; calendarLink?: string }> {
+      try {
+          const { google } = require('googleapis');
+          const creds = await prisma.integrationCredential.findFirst({
+              where: { integration: { businessId, provider: 'GOOGLE_CALENDAR', status: 'CONNECTED' } }
+          });
+          if (!creds) {
+              console.warn('[ConversationOrchestrator] No Google Calendar credential found to book event.');
+              return { success: false };
+          }
+
+          const { decrypt, encrypt } = require('../encryption');
+          let accessToken = decrypt(creds.accessTokenEncrypted);
+          const oauth2Client = new google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET);
+
+          if (creds.refreshTokenEncrypted) {
+              oauth2Client.setCredentials({
+                  access_token: accessToken,
+                  refresh_token: decrypt(creds.refreshTokenEncrypted)
+              });
+              if (creds.expiresAt && creds.expiresAt.getTime() < Date.now() + 60000) {
+                  try {
+                      const { credentials } = await oauth2Client.refreshAccessToken();
+                      if (credentials.access_token) {
+                          accessToken = credentials.access_token;
+                          oauth2Client.setCredentials(credentials);
+                          await prisma.integrationCredential.update({
+                              where: { id: creds.id },
+                              data: {
+                                  accessTokenEncrypted: encrypt(accessToken),
+                                  expiresAt: credentials.expiry_date ? new Date(credentials.expiry_date) : null
+                              }
+                          });
+                      }
+                  } catch (e: any) {
+                      console.warn('[ConversationOrchestrator] Calendar refresh error:', e.message);
+                  }
+              }
+          } else {
+              oauth2Client.setCredentials({ access_token: accessToken });
+          }
+
+          const calendarClient = google.calendar({ version: 'v3', auth: oauth2Client });
+
+          const event = {
+              summary: `Aasha Furniture Discussion with ${customer.name || 'Customer'}`,
+              description: `Discussion regarding custom furniture and requirements.${topic ? ` Topic: ${topic}` : ''}`,
+              start: {
+                  dateTime: slot.startIso,
+                  timeZone: 'Asia/Kolkata'
+              },
+              end: {
+                  dateTime: slot.endIso,
+                  timeZone: 'Asia/Kolkata'
+              },
+              attendees: customer.email ? [{ email: customer.email, displayName: customer.name || 'Customer' }] : [],
+              conferenceData: {
+                  createRequest: {
+                      requestId: `meet-${Date.now()}`,
+                      conferenceSolutionKey: { type: 'hangoutsMeet' }
+                  }
+              }
+          };
+
+          const res = await calendarClient.events.insert({
+              calendarId: 'primary',
+              requestBody: event,
+              conferenceDataVersion: 1,
+              sendUpdates: 'all'
+          });
+
+          console.log(`[ConversationOrchestrator] Google Calendar event booked successfully: ${res.data.id}`);
+          return {
+              success: true,
+              eventId: res.data.id,
+              meetLink: res.data.hangoutLink,
+              calendarLink: res.data.htmlLink
+          };
+      } catch (err: any) {
+          console.error('[ConversationOrchestrator] Error booking calendar meeting:', err.message);
+          return { success: false };
       }
   }
 
@@ -434,21 +541,34 @@ Rules:
               extracted.meetingDetails?.requestedTimeframe || body
           );
 
-          const slotItems = slots.map(s => `<li><strong>${s}</strong></li>`).join('');
+          // Select the single best available slot ("any one available date is enough")
+          const chosenSlot = slots[0];
+
+          // Mark/book the event directly in Google Calendar and invite the customer
+          const bookingResult = await this.bookGoogleCalendarMeeting(
+              businessId,
+              customer,
+              chosenSlot,
+              extracted.meetingDetails?.topic
+          );
+
+          const meetLinkLine = bookingResult.meetLink 
+              ? `<p><strong>Google Meet Link:</strong> <a href="${bookingResult.meetLink}">${bookingResult.meetLink}</a></p>`
+              : '';
 
           replyHtml = `
             <p>Dear ${customer.name || 'Customer'},</p>
-            <p>Thank you for reaching out! We would be delighted to schedule a discussion with you.</p>
-            <p>Here are our upcoming available slots based on our live schedule:</p>
-            <ul>
-              ${slotItems}
-            </ul>
+            <p>Thank you for reaching out! We would be delighted to connect for a discussion.</p>
+            <p>I have scheduled our meeting and marked it in Google Calendar for:</p>
+            <p style="font-size: 16px; margin: 12px 0;"><strong>📅 ${chosenSlot.slotLabel}</strong></p>
+            ${meetLinkLine}
+            <p>A Google Calendar invitation has been sent directly to your email address (<strong>${customer.email}</strong>).</p>
             <p>We can connect either:</p>
             <ol>
-              <li><strong>Virtually</strong> via Google Meet or a phone call, or</li>
+              <li><strong>Virtually</strong> via Google Meet (using the link above / in your invite), or</li>
               <li><strong>In-person</strong> at our workshop & showroom (Open Mon–Sat, 10:00 AM – 6:00 PM IST).</li>
             </ol>
-            <p>Please reply with the slot that works best for you and your preferred mode (virtual or showroom visit), and we will immediately send a calendar invitation to confirm.</p>
+            <p>If this date or time doesn't work for your schedule, simply reply to this email with your preferred timing and we will gladly reschedule.</p>
             <br>
             <p>Warm regards,<br>Aasha Furniture Team</p>
           `;
