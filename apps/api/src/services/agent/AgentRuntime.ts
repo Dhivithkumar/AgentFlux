@@ -2,6 +2,8 @@ import { prisma } from '@agent-flux/database';
 import { aiManager } from '../ai';
 import { ToolRegistry } from './ToolRegistry';
 
+const db = prisma as any;
+
 export class AgentRuntime {
   static async startExecution(
     businessId: string,
@@ -9,7 +11,7 @@ export class AgentRuntime {
     triggerType: string,
     triggerData: any
   ) {
-    const agent = await prisma.agent.findUnique({
+    const agent = await db.agent.findUnique({
       where: { id: agentId, businessId },
       include: { versions: true, permissions: true }
     });
@@ -23,7 +25,7 @@ export class AgentRuntime {
       throw new Error('Agent active version missing');
     }
 
-    const execution = await prisma.agentExecution.create({
+    const execution = await db.agentExecution.create({
       data: {
         businessId,
         agentId,
@@ -50,7 +52,7 @@ export class AgentRuntime {
   }
 
   static async resumeExecution(executionId: string, toolResult?: any) {
-    let execution = await prisma.agentExecution.findUnique({
+    let execution = await db.agentExecution.findUnique({
       where: { id: executionId },
       include: { agent: { include: { permissions: true } }, version: true }
     });
@@ -59,7 +61,7 @@ export class AgentRuntime {
       return;
     }
 
-    await prisma.agentExecution.update({
+    await db.agentExecution.update({
       where: { id: executionId },
       data: { status: 'EXECUTING' }
     });
@@ -101,7 +103,7 @@ export class AgentRuntime {
           config: providerConfig
         });
 
-        const step = await prisma.agentExecutionStep.create({
+        const step = await db.agentExecutionStep.create({
           data: {
             executionId,
             stepNumber: currentStepNum,
@@ -132,7 +134,7 @@ export class AgentRuntime {
            // Check governance / permissions
            const perm = agent.permissions.find((p: any) => p.toolName === tool.name);
            if (perm?.permission === 'REQUIRES_APPROVAL') {
-               await prisma.agentExecution.update({
+               await db.agentExecution.update({
                  where: { id: executionId },
                  data: { status: 'WAITING_FOR_APPROVAL', context: { ...context, history } }
                });
@@ -166,19 +168,19 @@ export class AgentRuntime {
       }
 
       if (keepRunning === false && execution.status === 'EXECUTING') {
-         await prisma.agentExecution.update({
+         await db.agentExecution.update({
            where: { id: executionId },
            data: { status: 'COMPLETED', completedAt: new Date(), context: { history } }
          });
       } else if (currentStepNum > agent.maxSteps) {
-         await prisma.agentExecution.update({
+         await db.agentExecution.update({
            where: { id: executionId },
            data: { status: 'FAILED', error: 'Max steps exceeded', completedAt: new Date(), context: { history } }
          });
       }
 
     } catch (error: any) {
-      await prisma.agentExecution.update({
+      await db.agentExecution.update({
         where: { id: executionId },
         data: { status: 'FAILED', error: error.message, completedAt: new Date(), context: { history } }
       });

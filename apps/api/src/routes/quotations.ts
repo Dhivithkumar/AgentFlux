@@ -57,6 +57,16 @@ router.post('/:id/generate', async (req: any, res) => {
   }
 });
 
+router.post('/:id/send', async (req: any, res) => {
+  try {
+    const { businessId, id } = req.params;
+    const sent = await quotationService.sendQuotation(businessId, id, req.user?.id);
+    res.json(sent);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.post('/:id/status', async (req: any, res) => {
   try {
     const { businessId, id } = req.params;

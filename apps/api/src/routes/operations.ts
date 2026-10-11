@@ -140,13 +140,13 @@ router.post('/sheets/sync', authenticate, requireBusinessMembership, async (req:
   try {
     const { businessId } = req.body;
     
-    // Async fire and forget for full sync
-    operationalSyncService.syncAll(businessId).catch(console.error);
+    await operationalSyncService.syncAll(businessId);
     
     return res.json({ success: true, message: 'Sync started' });
   } catch (error: any) {
     console.error('Error starting sync:', error);
-    return res.status(500).json({ success: false, error: error.message });
+    const status = error.name === 'SetupRequiredError' ? 400 : 500;
+    return res.status(status).json({ success: false, error: error.message });
   }
 });
 

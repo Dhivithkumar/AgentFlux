@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Outlet, Link, useNavigate } from 'react-router-dom';
 import { apiCall } from '../lib/api';
-import { Activity, LayoutDashboard, Settings, ChevronDown, CheckCircle, LogOut, Plus, Building2, Calendar } from 'lucide-react';
+import { Activity, LayoutDashboard, Settings, ChevronDown, CheckCircle, LogOut, Plus, Building2, Calendar, Landmark } from 'lucide-react';
+import { ToastProvider } from '../components/ui/Toast';
 
 export default function DashboardLayout() {
   const [user, setUser] = useState<any>(null);
@@ -80,6 +81,8 @@ export default function DashboardLayout() {
     { name: 'Enquiry Inbox', path: '/dashboard/enquiries' },
     { name: 'Orders & Bookings', path: '/dashboard/orders' },
     { name: 'Business Data', path: '/dashboard/business-data' },
+    { name: 'Finance', isHeader: true },
+    { name: 'Finance Centre', path: '/dashboard/finance', icon: Landmark },
     { name: 'Automations', isHeader: true },
     { name: 'Workflow Packs', path: '/dashboard/workflow-packs' },
     { name: 'Workflow Center', path: '/dashboard/workflows' },
@@ -207,7 +210,9 @@ export default function DashboardLayout() {
 
         <div className="flex-1 p-8 overflow-y-auto">
           {/* We pass a unique key to Outlet to force full re-mount on business switch */}
-          <Outlet key={currentBusiness.id} context={{ business: currentBusiness }} />
+          <ToastProvider>
+            <Outlet key={currentBusiness.id} context={{ business: currentBusiness, user }} />
+          </ToastProvider>
         </div>
       </main>
     </div>

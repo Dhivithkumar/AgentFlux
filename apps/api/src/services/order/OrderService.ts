@@ -1,6 +1,8 @@
 import { prisma } from '@agent-flux/database';
 import { randomBytes } from 'crypto';
 import { operationalSyncPoller } from '../queue/operationalSyncPoller';
+import { LifecycleStateMachine, OrderState } from './LifecycleStateMachine';
+import { EventBus } from '../eventBus';
 
 export class OrderService {
   async generateOrderNumber(businessId: string): Promise<string> {
@@ -10,19 +12,28 @@ export class OrderService {
   }
 
   async processQuotationAcceptance(businessId: string, customerId: string, message: string, threadId: string) {
-    // 1. Resolve quotation (prioritize thread context, then explicit quotation number)
+    // 1. Resolve quotation (prioritize thread context, then exact UUID, then quotation number)
     let quotation;
     
     if (threadId) {
       quotation = await prisma.quotation.findFirst({
-        // @ts-ignore - Prisma client out of sync
-        where: { businessId, customerId, gmailThreadId: threadId },
+        where: { businessId, customerId, gmailThreadId: threadId } as any,
         orderBy: { createdAt: 'desc' }
       });
     }
 
+    if (!quotation && message) {
+      // Check for UUID match
+      const uuidMatch = message.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+      if (uuidMatch) {
+        quotation = await prisma.quotation.findFirst({
+          where: { businessId, customerId, id: uuidMatch[0] }
+        });
+      }
+    }
+
     if (!quotation) {
-      const qtnMatch = message.match(/AF-QTN-\d+/i);
+      const qtnMatch = message.match(/(?:AF-QTN-|QUO-)[A-Za-z0-9_-]+/i);
       if (qtnMatch) {
         quotation = await prisma.quotation.findFirst({
           where: { businessId, customerId, quotationNumber: qtnMatch[0].toUpperCase() }
@@ -34,20 +45,33 @@ export class OrderService {
       return { status: 'FAILED', emailBody: 'We could not find a valid quotation for your request. Please specify the quotation number.' };
     }
 
-    // 2. Validate
-    if (quotation.status === 'EXPIRED') return { status: 'FAILED', emailBody: 'This quotation has expired.' };
-    if (quotation.status === 'CANCELLED') return { status: 'FAILED', emailBody: 'This quotation was cancelled.' };
+    // 2. Validate Quotation State
+    if (quotation.status === 'EXPIRED' || (quotation.validUntil && new Date(quotation.validUntil) < new Date())) {
+      return { status: 'FAILED', emailBody: 'This quotation has expired.' };
+    }
+    if (quotation.status === 'CANCELLED') {
+      return { status: 'FAILED', emailBody: 'This quotation was cancelled.' };
+    }
     
     // Idempotency check: if order already created from this quotation
     const existingOrder = await prisma.order.findFirst({
-      // @ts-ignore - Prisma client out of sync
       where: { businessId, quotationId: quotation.id }
     });
 
     if (existingOrder) {
-      // Return existing order data
+      // Return existing order data idempotently
       return this.buildAcceptanceSuccessPayload(existingOrder, quotation);
     }
+
+    // Check owner approval configuration
+    const business = await prisma.business.findUnique({ where: { id: businessId } });
+    const preferences = (business?.preferences as any) || {};
+    const requiresOwnerApproval = Boolean(preferences.requireOwnerApprovalForOrders);
+
+    const initialStatus = requiresOwnerApproval ? 'PENDING_OWNER_CONFIRMATION' : 'CONFIRMED';
+    const statusReason = requiresOwnerApproval 
+      ? 'Customer accepted quotation via email, pending owner review'
+      : 'Customer accepted quotation via email, auto-confirmed';
 
     // 3. Create Order transactionally
     let order;
@@ -63,47 +87,57 @@ export class OrderService {
           if (!checkQtn || checkQtn.orderId) throw new Error('QUOTATION_ALREADY_PROCESSED');
           if (checkQtn.validUntil && checkQtn.validUntil < new Date()) throw new Error('QUOTATION_EXPIRED');
 
+          const rawLineItems = typeof quotation.lineItems === 'string' ? JSON.parse(quotation.lineItems) : quotation.lineItems;
+          const lineItems = Array.isArray(rawLineItems) ? rawLineItems : [];
+
           const newOrder = await tx.order.create({
             data: {
               businessId,
               customerId,
-              // @ts-ignore - Prisma client out of sync
               quotationId: quotation.id,
               orderNumber,
-              status: 'PENDING_OWNER_CONFIRMATION',
+              status: initialStatus,
               source: 'GMAIL',
               subtotal: quotation.subtotal,
               discount: quotation.discountAmount,
               tax: quotation.taxAmount,
               totalAmount: quotation.totalAmount,
               currency: quotation.currency,
+              structuredData: {
+                lineItems,
+                quotationNumber: quotation.quotationNumber,
+                customerSnapshot: quotation.customerSnapshot,
+                requiresOwnerApproval
+              },
               statusHistory: {
                 create: {
-                  toStatus: 'PENDING_OWNER_CONFIRMATION',
-                  reason: 'Customer accepted quotation via email, pending owner review'
+                  toStatus: initialStatus,
+                  reason: statusReason
                 }
               }
             }
           });
 
-          // Create Order Items
-          const lineItems: any[] = typeof quotation.lineItems === 'string' ? JSON.parse(quotation.lineItems) : quotation.lineItems;
-          if (Array.isArray(lineItems)) {
-            // @ts-ignore - Prisma client out of sync
-            await (tx as any).orderItem.createMany({
-              data: lineItems.map(item => ({
-                orderId: newOrder.id,
-                productRef: item.sku || item.productRef,
-                productName: item.productName || item.description || 'Unknown Product',
-                sku: item.sku,
-                description: item.description,
-                quantity: item.quantity || 1,
-                unitPrice: item.unitPrice || 0,
-                taxableValue: item.taxableValue || ((item.unitPrice || 0) * (item.quantity || 1)),
-                tax: item.taxAmount || 0,
-                lineTotal: item.total || 0
-              }))
-            });
+          // Create Order Items if model supported
+          try {
+            if (lineItems.length > 0 && (tx as any).orderItem) {
+              await (tx as any).orderItem.createMany({
+                data: lineItems.map((item: any) => ({
+                  orderId: newOrder.id,
+                  productRef: item.sku || item.productRef,
+                  productName: item.productName || item.description || 'Unknown Product',
+                  sku: item.sku,
+                  description: item.description,
+                  quantity: item.quantity || 1,
+                  unitPrice: item.unitPrice || 0,
+                  taxableValue: item.taxableValue || ((item.unitPrice || 0) * (item.quantity || 1)),
+                  tax: item.taxAmount || 0,
+                  lineTotal: item.total || item.lineTotal || 0
+                }))
+              });
+            }
+          } catch {
+            // Safe fallback if orderItem model is absent
           }
 
           // Update quotation status and orderId
@@ -117,7 +151,6 @@ export class OrderService {
         break;
       } catch (err: any) {
         if (err.message === 'QUOTATION_ALREADY_PROCESSED') {
-          // @ts-ignore - Prisma client out of sync
           const raceOrder = await prisma.order.findFirst({ where: { businessId, quotationId: quotation.id } });
           if (raceOrder) {
             order = raceOrder;
@@ -136,17 +169,28 @@ export class OrderService {
 
     if (!order) throw new Error('Order creation failed due to concurrency constraints.');
 
-    // 4. Emit event
+    // 4. Emit event based on approval state
     const { EventBus } = require('../../services/eventBus');
-    EventBus.publish(businessId, 'ORDER_CREATED', {
-      orderId: order.id,
-      orderNumber: order.orderNumber,
-      quotationId: quotation.id,
-      customerId
-    });
+    if (order.status === 'CONFIRMED') {
+      EventBus.publish(businessId, 'ORDER_CONFIRMED', {
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        quotationId: quotation.id,
+        customerId
+      });
+    } else {
+      EventBus.publish(businessId, 'ORDER_CREATED', {
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        quotationId: quotation.id,
+        customerId,
+        requiresOwnerApproval: true
+      });
+    }
 
     const { operationalSyncPoller } = require('../queue/operationalSyncPoller');
     operationalSyncPoller.enqueue(businessId, 'ORDER', order.id, 'CREATE').catch(console.error);
+    operationalSyncPoller.enqueue(businessId, 'QUOTATION', quotation.id, 'UPDATE').catch(console.error);
 
     return this.buildAcceptanceSuccessPayload(order, quotation);
   }
@@ -274,7 +318,7 @@ Aasha Furniture Team`;
               source: enquiry.source,
               structuredData: enquiry.structuredData as any,
               totalAmount: isNaN(totalAmount) ? null : totalAmount,
-              currency: 'USD',
+              currency: 'INR',
               assignedTo: enquiry.assignedTo,
               statusHistory: {
                 create: {
@@ -364,33 +408,70 @@ Aasha Furniture Team`;
   }
 
   async updateOrderStatus(businessId: string, orderId: string, newStatus: string, userId: string, reason?: string) {
-    const order = await prisma.order.findUnique({ where: { id: orderId, businessId } });
-    if (!order) throw new Error('Order not found');
-
-    // Simple transition validation could go here based on Workflow configuration.
-    // Assuming generic configuration allows transitions if valid strings.
-    if (order.status === newStatus) return order;
-
-    const updatedOrder = await prisma.$transaction(async (tx) => {
-      const updated = await tx.order.update({
-        where: { id: orderId },
-        data: { status: newStatus }
-      });
-
-      await tx.orderStatusHistory.create({
-        data: {
-          orderId,
-          fromStatus: order.status,
-          toStatus: newStatus,
-          reason,
-          changedById: userId
-        }
-      });
-
-      return updated;
-    });
+    const updatedOrder = await LifecycleStateMachine.transitionOrder(
+      businessId,
+      orderId,
+      newStatus as OrderState,
+      userId,
+      reason
+    );
 
     // Operational Sync for the status update
+    operationalSyncPoller.enqueue(businessId, 'ORDER', updatedOrder.id, 'STATUS_UPDATE').catch(console.error);
+
+    return updatedOrder;
+  }
+
+  async approveOrder(businessId: string, orderId: string, userId: string, comment?: string) {
+    const order = await prisma.order.findUnique({ where: { id: orderId, businessId } });
+    if (!order) throw new Error('Order not found');
+    if (order.status !== 'PENDING_OWNER_CONFIRMATION') {
+      throw new Error(`Order cannot be approved from status ${order.status}. Only PENDING_OWNER_CONFIRMATION orders can be approved.`);
+    }
+
+    const updatedOrder = await LifecycleStateMachine.transitionOrder(
+      businessId,
+      orderId,
+      'CONFIRMED',
+      userId,
+      comment || 'Owner approved order',
+      { requiresOwnerApproval: true, ownerApproved: true }
+    );
+
+    EventBus.publish(businessId, 'ORDER_CONFIRMED', {
+      orderId: updatedOrder.id,
+      orderNumber: updatedOrder.orderNumber,
+      customerId: updatedOrder.customerId,
+      businessId
+    });
+
+    operationalSyncPoller.enqueue(businessId, 'ORDER', updatedOrder.id, 'STATUS_UPDATE').catch(console.error);
+
+    return updatedOrder;
+  }
+
+  async rejectOrder(businessId: string, orderId: string, userId: string, reason?: string) {
+    const order = await prisma.order.findUnique({ where: { id: orderId, businessId } });
+    if (!order) throw new Error('Order not found');
+    if (order.status !== 'PENDING_OWNER_CONFIRMATION') {
+      throw new Error(`Order cannot be rejected from status ${order.status}. Only PENDING_OWNER_CONFIRMATION orders can be rejected.`);
+    }
+
+    const updatedOrder = await LifecycleStateMachine.transitionOrder(
+      businessId,
+      orderId,
+      'REJECTED',
+      userId,
+      reason || 'Owner rejected order'
+    );
+
+    EventBus.publish(businessId, 'ORDER_REJECTED', {
+      orderId: updatedOrder.id,
+      orderNumber: updatedOrder.orderNumber,
+      customerId: updatedOrder.customerId,
+      reason: reason || 'Owner rejected order'
+    });
+
     operationalSyncPoller.enqueue(businessId, 'ORDER', updatedOrder.id, 'STATUS_UPDATE').catch(console.error);
 
     return updatedOrder;

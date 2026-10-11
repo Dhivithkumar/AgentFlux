@@ -4,7 +4,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 import PizZip from 'pizzip';
 import { createReport } from 'docx-templates';
-import { convertDocxToPdfWindows } from './docxToPdf';
+import { convertDocxToPdf } from './docxToPdf';
 
 export class DocumentGenerationService {
   
@@ -60,7 +60,6 @@ export class DocumentGenerationService {
 
     const formatCurrency = (amount: number | null | undefined) => {
         if (amount === null || amount === undefined) return '';
-        // Use business configured currency or fallback to INR
         return `₹${amount.toLocaleString('en-IN')}`;
     };
 
@@ -125,10 +124,10 @@ export class DocumentGenerationService {
       quotation_number: record.quotationNumber || record.invoiceNumber || '',
       invoice_number: record.invoiceNumber || '',
       order_number: record.orderNumber || record.id?.substring(0,8) || '',
-      quotation_date: new Date().toLocaleDateString('en-IN'),
-      invoice_date: new Date().toLocaleDateString('en-IN'),
-      due_date: record.dueDate ? new Date(record.dueDate).toLocaleDateString('en-IN') : new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toLocaleDateString('en-IN'),
-      valid_until: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toLocaleDateString('en-IN'),
+      quotation_date: record.quotationDate ? new Date(record.quotationDate).toLocaleDateString('en-IN') : '',
+      invoice_date: record.invoiceDate ? new Date(record.invoiceDate).toLocaleDateString('en-IN') : '',
+      due_date: record.dueDate ? new Date(record.dueDate).toLocaleDateString('en-IN') : '',
+      valid_until: record.validUntil ? new Date(record.validUntil).toLocaleDateString('en-IN') : '',
       
       // Delivery
       delivery_name: customerSnapshot.name || '',
@@ -140,11 +139,11 @@ export class DocumentGenerationService {
       // Totals (from deterministic engine)
       subtotal: formatCurrency(record.subtotal),
       discount_total: formatCurrency(record.discountAmount),
-      taxable_amount: formatCurrency(record.subtotal - (record.discountAmount || 0)),
-      gst_amount: formatCurrency(record.taxAmount || 9120), // Fallback to 9120 for the specific test if missing
-      tax_amount: formatCurrency(record.taxAmount || 9120),
+      taxable_amount: formatCurrency((record.subtotal || 0) - (record.discountAmount || 0)),
+      gst_amount: formatCurrency(record.taxAmount || 0),
+      tax_amount: formatCurrency(record.taxAmount || 0),
       grand_total: formatCurrency(record.totalAmount),
-      rounding_adjustment: '₹0',
+      rounding_adjustment: formatCurrency(0),
 
       // Taxes
       tax_name: 'GST',
@@ -256,49 +255,129 @@ export class DocumentGenerationService {
     
     fs.writeFileSync(tempDocxPath, renderedDocxBuffer);
 
-    // 6. Convert to PDF using MS Word COM
+    let pdfBuffer: Buffer;
     try {
-        convertDocxToPdfWindows(tempDocxPath, finalPdfPath);
+      // 6. Convert to PDF (multi-tier with pure Node fallback)
+      await convertDocxToPdf(tempDocxPath, finalPdfPath);
+      pdfBuffer = fs.readFileSync(finalPdfPath);
     } catch (e: any) {
-        throw new Error(`DOCUMENT_CONVERSION_FAILED: Failed to convert DOCX to PDF - ${e.message}`);
+      throw new Error(`DOCUMENT_CONVERSION_FAILED: Failed to convert DOCX to PDF - ${e.message}`);
     } finally {
-        // Clean up temporary DOCX
-        if (fs.existsSync(tempDocxPath)) {
-            fs.unlinkSync(tempDocxPath);
-        }
-    }
-
-    // 7. Validate and Store
-    const pdfBuffer = fs.readFileSync(finalPdfPath);
-    const generatedPdfContentHash = crypto.createHash('sha256').update(pdfBuffer).digest('hex');
-
-    const kb = await prisma.knowledgeBase.findFirst({ where: { businessId } });
-    
-    const generatedDoc = await prisma.knowledgeDocument.create({
-      data: {
-        businessId,
-        knowledgeBaseId: kb?.id || 'mock-kb',
-        filename: `${documentType}_${record.quotationNumber || record.invoiceNumber}.pdf`,
-        mimeType: 'application/pdf',
-        fileSize: pdfBuffer.length,
-        storagePath: finalPdfPath,
-        contentHash: generatedPdfContentHash,
-        status: 'INDEXED',
-        knowledgeType: 'OTHER'
+      // Clean up temporary DOCX
+      if (fs.existsSync(tempDocxPath)) {
+        try { fs.unlinkSync(tempDocxPath); } catch {}
       }
-    });
-
-    if (documentType === 'QUOTATION') {
-      await prisma.quotation.update({
-        where: { id: record.id },
-        data: { 
-          generatedDocumentId: generatedDoc.id,
-          status: 'GENERATED'
-        }
-      });
     }
 
-    return generatedDoc;
+    try {
+      // 7. Check existing document identity for idempotency / update
+      const existingKnowledgeDocId: string | null = record.generatedDocumentId || null;
+      let existingDriveFileId: string | null = null;
+      if (existingKnowledgeDocId) {
+        const existingDoc = await prisma.knowledgeDocument.findUnique({
+          where: { id: existingKnowledgeDocId }
+        });
+        if (existingDoc?.externalId) {
+          existingDriveFileId = existingDoc.externalId;
+        }
+      }
+
+      // 8. Upload or update PDF in Google Drive
+      const { googleDriveStorageService } = await import('./GoogleDriveStorageService');
+      const documentNumber =
+        record.quotationNumber ||
+        record.invoiceNumber ||
+        `${documentType}-${record.id.substring(0, 8)}`;
+
+      const driveResult = await googleDriveStorageService.uploadOrUpdateDocument(businessId, {
+        documentType,
+        documentNumber,
+        pdfBuffer,
+        existingDriveFileId
+      });
+
+      // 9. Persist Metadata in KnowledgeDocument
+      const generatedPdfContentHash = crypto.createHash('sha256').update(pdfBuffer).digest('hex');
+
+      let kb = await prisma.knowledgeBase.findFirst({ where: { businessId } });
+      if (!kb) {
+        kb = await prisma.knowledgeBase.create({
+          data: {
+            businessId,
+            name: 'Business Documents',
+            description: 'Knowledge Base for generated quotations and invoices'
+          }
+        });
+      }
+
+      let generatedDoc: any;
+      if (existingKnowledgeDocId) {
+        generatedDoc = await prisma.knowledgeDocument.update({
+          where: { id: existingKnowledgeDocId },
+          data: {
+            filename: driveResult.fileName,
+            mimeType: driveResult.mimeType,
+            fileSize: driveResult.fileSize,
+            storagePath: `google-drive://${driveResult.fileId}`,
+            externalId: driveResult.fileId,
+            externalUrl: driveResult.webViewLink,
+            contentHash: generatedPdfContentHash,
+            status: 'INDEXED',
+            updatedAt: new Date()
+          }
+        });
+      } else {
+        generatedDoc = await prisma.knowledgeDocument.create({
+          data: {
+            businessId,
+            knowledgeBaseId: kb.id,
+            filename: driveResult.fileName,
+            mimeType: driveResult.mimeType,
+            fileSize: driveResult.fileSize,
+            storagePath: `google-drive://${driveResult.fileId}`,
+            externalId: driveResult.fileId,
+            externalUrl: driveResult.webViewLink,
+            contentHash: generatedPdfContentHash,
+            status: 'INDEXED',
+            knowledgeType: 'OTHER'
+          }
+        });
+      }
+
+      // 10. Update canonical entity status
+      if (documentType === 'QUOTATION') {
+        await prisma.quotation.update({
+          where: { id: record.id },
+          data: { 
+            generatedDocumentId: generatedDoc.id,
+            status: 'GENERATED'
+          }
+        });
+      } else {
+        await prisma.invoice.update({
+          where: { id: record.id },
+          data: { 
+            generatedDocumentId: generatedDoc.id,
+            status: 'ISSUED'
+          }
+        });
+      }
+
+      // 11. Enqueue Single Authoritative Operational Sheets Sync
+      try {
+        const { operationalSyncPoller } = await import('../queue/operationalSyncPoller');
+        await operationalSyncPoller.enqueue(businessId, documentType, record.id, 'SYNC');
+      } catch (syncErr: any) {
+        console.warn(`[DocumentGenerationService] Operational Sheets sync enqueue warning: ${syncErr.message}`);
+      }
+
+      return generatedDoc;
+    } finally {
+      // Clean up temporary final PDF from local disk (keep local temporary storage only where necessary)
+      if (fs.existsSync(finalPdfPath)) {
+        try { fs.unlinkSync(finalPdfPath); } catch {}
+      }
+    }
   }
 }
 

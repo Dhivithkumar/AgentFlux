@@ -29,6 +29,7 @@ import EnquiryDetail from './pages/enquiries/EnquiryDetail';
 import OrderList from './pages/orders/OrderList';
 import OrderDetail from './pages/orders/OrderDetail';
 import BusinessData from './pages/enquiries/BusinessData';
+import FinanceCenter from './pages/finance/FinanceCenter';
 
 function App() {
   return (
@@ -51,6 +52,7 @@ function App() {
             <Route path="enquiries/:id" element={<EnquiryDetail />} />
             <Route path="orders" element={<OrderList />} />
             <Route path="orders/:id" element={<OrderDetail />} />
+            <Route path="finance" element={<FinanceCenter />} />
             
             <Route path="workflow-packs" element={<WorkflowPacks />} />
             <Route path="workflows" element={<WorkflowCenter />} />

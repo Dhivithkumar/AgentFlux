@@ -82,10 +82,65 @@ router.get('/', authenticate, async (req: Request, res: Response) => {
 
     const integrations = await prisma.integration.findMany({
       where: { businessId },
+      include: {
+        credential: {
+          select: {
+            expiresAt: true,
+            updatedAt: true,
+            refreshTokenEncrypted: true
+          }
+        }
+      },
       orderBy: { createdAt: 'desc' }
     });
 
-    res.json({ success: true, data: integrations });
+    const enriched = integrations.map((int: any) => {
+      let capabilities: string[] = [];
+      try {
+        const providerImpl = getConnectorProvider(int.provider);
+        capabilities = providerImpl.getCapabilities();
+      } catch {}
+
+      const isTokenExpired = int.credential?.expiresAt
+        ? new Date(int.credential.expiresAt).getTime() < Date.now()
+        : false;
+
+      const meta = (int.metadata as any) || {};
+
+      // Check scope completeness
+      let missingScopeMessage: string | null = null;
+      const scopes = int.scopes || [];
+      if (int.provider === 'GOOGLE_DRIVE' && !scopes.some((s: string) => s.includes('drive.file') || s.includes('drive'))) {
+        missingScopeMessage = 'Missing required Google Drive upload scope (drive.file). Reconnection required.';
+      } else if (int.provider === 'GOOGLE_SHEETS' && !scopes.some((s: string) => s.includes('spreadsheets'))) {
+        missingScopeMessage = 'Missing required Google Sheets scope (spreadsheets). Reconnection required.';
+      } else if (int.provider === 'GMAIL' && !scopes.some((s: string) => s.includes('gmail'))) {
+        missingScopeMessage = 'Missing required Gmail scope. Reconnection required.';
+      }
+
+      return {
+        id: int.id,
+        businessId: int.businessId,
+        provider: int.provider,
+        accountId: int.accountId,
+        accountEmail: int.accountEmail,
+        displayName: int.displayName,
+        status: missingScopeMessage ? IntegrationStatus.RECONNECT_REQUIRED : int.status,
+        scopes: int.scopes,
+        capabilities,
+        isTokenExpired,
+        expiresAt: int.credential?.expiresAt || null,
+        hasRefreshToken: !!int.credential?.refreshTokenEncrypted,
+        lastConnectedAt: int.lastConnectedAt,
+        lastVerifiedAt: int.lastVerifiedAt,
+        lastSuccessfulOperation: meta.lastSuccessfulOperation || int.lastVerifiedAt,
+        lastError: missingScopeMessage || meta.lastError || null,
+        metadata: int.metadata,
+        createdAt: int.createdAt
+      };
+    });
+
+    res.json({ success: true, data: enriched });
   } catch (error: any) {
     console.error('Fetch Integrations Error:', error);
     res.status(500).json({ success: false, error: 'Failed to fetch integrations' });
@@ -289,35 +344,143 @@ router.post('/:integrationId/verify', authenticate, async (req: Request, res: Re
   }
 
   if (!integration.credential) {
-    return res.status(400).json({ success: false, error: 'No credentials found' });
+    return res.status(400).json({ success: false, error: 'No credentials found for this integration. Setup or reconnection required.' });
   }
 
   try {
     const providerImpl = getConnectorProvider(integration.provider);
-    const accessToken = decrypt(integration.credential.accessTokenEncrypted);
-    
-    // We should implement automatic token refresh here if it's expired before verifying
-    // But for verification purposes, we'll try it directly. If it fails, we mark RECONNECT_REQUIRED.
-    const isValid = await providerImpl.verifyConnection(accessToken);
+    let accessToken = decrypt(integration.credential.accessTokenEncrypted);
 
-    if (isValid) {
+    // 1. Auto-refresh token if expired or expiring within 60s
+    const isExpiringSoon =
+      integration.credential.expiresAt &&
+      new Date(integration.credential.expiresAt).getTime() < Date.now() + 60000;
+
+    if (isExpiringSoon && integration.credential.refreshTokenEncrypted) {
+      try {
+        const refreshToken = decrypt(integration.credential.refreshTokenEncrypted);
+        const newTokens = await providerImpl.refreshAccessToken(refreshToken);
+        accessToken = newTokens.accessToken;
+
+        await prisma.integrationCredential.update({
+          where: { id: integration.credential.id },
+          data: {
+            accessTokenEncrypted: encrypt(newTokens.accessToken),
+            expiresAt: newTokens.expiresIn ? new Date(Date.now() + newTokens.expiresIn * 1000) : null,
+            ...(newTokens.refreshToken ? { refreshTokenEncrypted: encrypt(newTokens.refreshToken) } : {})
+          }
+        });
+      } catch (refErr: any) {
+        console.error(`[Verify] Token refresh failed for ${integration.provider}:`, refErr.message);
+        await prisma.integration.update({
+          where: { id: integration.id },
+          data: {
+            status: IntegrationStatus.RECONNECT_REQUIRED,
+            metadata: {
+              ...((integration.metadata as any) || {}),
+              lastError: `OAuth token refresh failed: ${refErr.message}. Reconnection required.`
+            }
+          }
+        });
+        return res.json({
+          success: false,
+          data: {
+            status: IntegrationStatus.RECONNECT_REQUIRED,
+            error: 'OAuth token refresh failed. Please reconnect your account.'
+          }
+        });
+      }
+    }
+
+    // 2. Validate granted capabilities and required scopes
+    const scopes = integration.scopes || [];
+    let scopeError: string | null = null;
+    if (integration.provider === 'GOOGLE_DRIVE' && !scopes.some((s: string) => s.includes('drive.file') || s.includes('drive'))) {
+      scopeError = 'Missing required upload permissions: https://www.googleapis.com/auth/drive.file. Please reconnect Google Drive to grant upload access.';
+    } else if (integration.provider === 'GOOGLE_SHEETS' && !scopes.some((s: string) => s.includes('spreadsheets'))) {
+      scopeError = 'Missing required Google Sheets permission: https://www.googleapis.com/auth/spreadsheets. Please reconnect Google Sheets.';
+    } else if (integration.provider === 'GMAIL' && !scopes.some((s: string) => s.includes('gmail'))) {
+      scopeError = 'Missing required Gmail permissions. Please reconnect Gmail.';
+    }
+
+    if (scopeError) {
       await prisma.integration.update({
         where: { id: integration.id },
-        data: { 
-          status: IntegrationStatus.CONNECTED,
-          lastVerifiedAt: new Date()
+        data: {
+          status: IntegrationStatus.RECONNECT_REQUIRED,
+          metadata: {
+            ...((integration.metadata as any) || {}),
+            lastError: scopeError
+          }
         }
       });
-      res.json({ success: true, data: { status: IntegrationStatus.CONNECTED } });
+      return res.json({
+        success: false,
+        data: {
+          status: IntegrationStatus.RECONNECT_REQUIRED,
+          error: scopeError
+        }
+      });
+    }
+
+    // 3. Operational Verification: verify real provider API calls, not just userinfo
+    const isOperationValid = await providerImpl.verifyConnection(accessToken);
+
+    if (isOperationValid) {
+      const now = new Date();
+      await prisma.integration.update({
+        where: { id: integration.id },
+        data: {
+          status: IntegrationStatus.CONNECTED,
+          lastVerifiedAt: now,
+          metadata: {
+            ...((integration.metadata as any) || {}),
+            lastSuccessfulOperation: now.toISOString(),
+            lastError: null
+          }
+        }
+      });
+      return res.json({
+        success: true,
+        data: {
+          status: IntegrationStatus.CONNECTED,
+          capabilities: providerImpl.getCapabilities(),
+          lastVerifiedAt: now
+        }
+      });
     } else {
       await prisma.integration.update({
         where: { id: integration.id },
-        data: { status: IntegrationStatus.RECONNECT_REQUIRED }
+        data: {
+          status: IntegrationStatus.RECONNECT_REQUIRED,
+          metadata: {
+            ...((integration.metadata as any) || {}),
+            lastError: 'Provider verification failed. Granted session may have expired or been revoked.'
+          }
+        }
       });
-      res.json({ success: true, data: { status: IntegrationStatus.RECONNECT_REQUIRED } });
+      return res.json({
+        success: false,
+        data: {
+          status: IntegrationStatus.RECONNECT_REQUIRED,
+          error: 'Provider session verification failed. Reconnection required.'
+        }
+      });
     }
   } catch (error: any) {
-    res.status(500).json({ success: false, error: 'Verification failed' });
+    console.error(`[Verify] Error verifying integration ${integration.id}:`, error);
+    await prisma.integration.update({
+      where: { id: integration.id },
+      data: {
+        status: IntegrationStatus.ERROR,
+        metadata: {
+          ...((integration.metadata as any) || {}),
+          lastError: error.message || 'Operational verification call failed'
+        }
+      }
+    }).catch(() => {});
+
+    return res.status(500).json({ success: false, error: error.message || 'Verification failed' });
   }
 });
 

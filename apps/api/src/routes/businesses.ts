@@ -50,9 +50,11 @@ router.post('/', async (req: AuthRequest, res) => {
   }
 });
 
+import { BusinessProfileService } from '../services/business/profileService';
+
 router.get('/profile', async (req: AuthRequest, res) => {
   try {
-    const businessId = req.query.businessId as string;
+    const businessId = (req.query.businessId as string) || (req.headers['x-business-id'] as string);
     if (!businessId) {
       return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Missing businessId' } });
     }
@@ -71,15 +73,18 @@ router.get('/profile', async (req: AuthRequest, res) => {
       return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Access denied' } });
     }
 
-    res.json({ success: true, data: membership.business });
-  } catch (error) {
-    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Internal server error' } });
+    const profile = BusinessProfileService.flattenProfile(membership.business, true);
+    const readiness = BusinessProfileService.calculateReadiness(profile);
+
+    res.json({ success: true, data: profile, readiness });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message || 'Internal server error' } });
   }
 });
 
 router.patch('/profile', async (req: AuthRequest, res) => {
   try {
-    const businessId = req.query.businessId as string || req.body.businessId as string;
+    const businessId = (req.query.businessId as string) || (req.body.businessId as string) || (req.headers['x-business-id'] as string);
     if (!businessId) {
       return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Missing businessId' } });
     }
@@ -96,74 +101,14 @@ router.patch('/profile', async (req: AuthRequest, res) => {
     if (!membership) {
       return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Access denied' } });
     }
-    
-    const { 
-      name, industry, businessType, country, timezone, currency, website, description, contactInfo, operatingHours, preferences,
-      legalBusinessName, displayName, email, phone, alternatePhone, supportEmail,
-      addressLine1, addressLine2, city, state, postalCode,
-      taxRegistrationStatus, gstin, pan, defaultTaxRate,
-      invoicePrefix, quotationPrefix, orderPrefix, defaultPaymentTerms, defaultInvoiceDueDays, invoiceNotes, invoiceFooter, quotationFooter,
-      bankName, bankAccountName, bankAccountNumber, bankIfsc, bankBranch, upiId, paymentInstructions,
-      authorizedSignatoryName, authorizedSignatoryDesignation, authorizedSignatoryEmail, authorizedSignatoryPhone, authorizedSignatorySignatureUrl
-    } = req.body;
 
-    const updateData: any = {
-      ...(name !== undefined && { name }),
-      ...(industry !== undefined && { industry }),
-      ...(businessType !== undefined && { businessType }),
-      ...(country !== undefined && { country }),
-      ...(timezone !== undefined && { timezone }),
-      ...(currency !== undefined && { currency }),
-      ...(website !== undefined && { website }),
-      ...(description !== undefined && { description }),
-      ...(contactInfo !== undefined && { contactInfo }),
-      ...(operatingHours !== undefined && { operatingHours }),
-      ...(preferences !== undefined && { preferences }),
-      ...(legalBusinessName !== undefined && { legalBusinessName }),
-      ...(displayName !== undefined && { displayName }),
-      ...(email !== undefined && { email }),
-      ...(phone !== undefined && { phone }),
-      ...(alternatePhone !== undefined && { alternatePhone }),
-      ...(supportEmail !== undefined && { supportEmail }),
-      ...(addressLine1 !== undefined && { addressLine1 }),
-      ...(addressLine2 !== undefined && { addressLine2 }),
-      ...(city !== undefined && { city }),
-      ...(state !== undefined && { state }),
-      ...(postalCode !== undefined && { postalCode }),
-      ...(taxRegistrationStatus !== undefined && { taxRegistrationStatus }),
-      ...(gstin !== undefined && { gstin }),
-      ...(pan !== undefined && { pan }),
-      ...(defaultTaxRate !== undefined && { defaultTaxRate: defaultTaxRate ? parseFloat(defaultTaxRate) : null }),
-      ...(invoicePrefix !== undefined && { invoicePrefix }),
-      ...(quotationPrefix !== undefined && { quotationPrefix }),
-      ...(orderPrefix !== undefined && { orderPrefix }),
-      ...(defaultPaymentTerms !== undefined && { defaultPaymentTerms }),
-      ...(defaultInvoiceDueDays !== undefined && { defaultInvoiceDueDays: defaultInvoiceDueDays !== null ? parseInt(defaultInvoiceDueDays) : null }),
-      ...(invoiceNotes !== undefined && { invoiceNotes }),
-      ...(invoiceFooter !== undefined && { invoiceFooter }),
-      ...(quotationFooter !== undefined && { quotationFooter }),
-      ...(bankName !== undefined && { bankName }),
-      ...(bankAccountName !== undefined && { bankAccountName }),
-      ...(bankAccountNumber !== undefined && { bankAccountNumber }),
-      ...(bankIfsc !== undefined && { bankIfsc }),
-      ...(bankBranch !== undefined && { bankBranch }),
-      ...(upiId !== undefined && { upiId }),
-      ...(paymentInstructions !== undefined && { paymentInstructions }),
-      ...(authorizedSignatoryName !== undefined && { authorizedSignatoryName }),
-      ...(authorizedSignatoryDesignation !== undefined && { authorizedSignatoryDesignation }),
-      ...(authorizedSignatoryEmail !== undefined && { authorizedSignatoryEmail }),
-      ...(authorizedSignatoryPhone !== undefined && { authorizedSignatoryPhone }),
-      ...(authorizedSignatorySignatureUrl !== undefined && { authorizedSignatorySignatureUrl }),
-    };
+    const updatedProfile = await BusinessProfileService.updateProfile(businessId, req.body);
+    const readiness = BusinessProfileService.calculateReadiness(updatedProfile);
 
-    const business = await prisma.business.update({
-      where: { id: businessId },
-      data: updateData
-    });
-
-    res.json({ success: true, data: business });
-  } catch (error) {
-    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Internal server error' } });
+    res.json({ success: true, data: updatedProfile, readiness });
+  } catch (error: any) {
+    console.error('Error updating profile:', error);
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message || 'Internal server error' } });
   }
 });
 
@@ -241,4 +186,72 @@ router.get('/:businessId/metrics', async (req: AuthRequest, res) => {
   }
 });
 
+import { BusinessConfigurationService } from '../services/business/configurationService';
+
+// GET /:businessId/configuration
+router.get('/:businessId/configuration', async (req: AuthRequest, res) => {
+  try {
+    const { businessId } = req.params;
+    const membership = await prisma.membership.findUnique({
+      where: { userId_businessId: { userId: req.user!.id, businessId } }
+    });
+    if (!membership) {
+      return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Access denied' } });
+    }
+
+    const config = await BusinessConfigurationService.getConfiguration(businessId);
+    res.json({ success: true, data: config });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message || 'Internal server error' } });
+  }
+});
+
+// PATCH /:businessId/configuration
+router.patch('/:businessId/configuration', async (req: AuthRequest, res) => {
+  try {
+    const { businessId } = req.params;
+    const membership = await prisma.membership.findUnique({
+      where: { userId_businessId: { userId: req.user!.id, businessId } }
+    });
+    if (!membership) {
+      return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Access denied' } });
+    }
+
+    const updated = await BusinessConfigurationService.updateConfiguration(businessId, req.body);
+    res.json({ success: true, data: updated });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message || 'Internal server error' } });
+  }
+});
+
+// POST /:businessId/configuration/review
+router.post('/:businessId/configuration/review', async (req: AuthRequest, res) => {
+  try {
+    const { businessId } = req.params;
+    const membership = await prisma.membership.findUnique({
+      where: { userId_businessId: { userId: req.user!.id, businessId } }
+    });
+    if (!membership) {
+      return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Access denied' } });
+    }
+
+    const review = await BusinessConfigurationService.reviewConfiguration(businessId);
+    res.json({ success: true, data: review });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message || 'Internal server error' } });
+  }
+});
+
+// POST /:businessId/configuration/confirm
+router.post('/:businessId/configuration/confirm', async (req: AuthRequest, res) => {
+  try {
+    const { businessId } = req.params;
+    const confirmed = await BusinessConfigurationService.confirmConfiguration(businessId, req.user!.id);
+    res.json({ success: true, data: confirmed });
+  } catch (error: any) {
+    res.status(400).json({ success: false, error: { code: 'CONFIRMATION_FAILED', message: error.message || 'Failed to confirm configuration' } });
+  }
+});
+
 export default router;
+

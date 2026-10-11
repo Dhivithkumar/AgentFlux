@@ -180,10 +180,7 @@ export async function activateFurniturePack(businessId: string, workflowIndex?: 
   await prisma.auditLog.create({
     data: {
       businessId,
-      eventType: 'WORKFLOW_PACK_ACTIVATED',
-      resourceType: 'WORKFLOW_PACK',
-      resourceId: 'FURNITURE_PACK',
-      metadata: { workflowsInstalled: workflowsCreated }
+      eventType: 'WORKFLOW_PACK_ACTIVATED'
     }
   });
 

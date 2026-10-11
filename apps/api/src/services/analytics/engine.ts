@@ -1,5 +1,7 @@
 import { prisma } from '@agent-flux/database';
 
+const db = prisma as any;
+
 export class AnalyticsEngine {
   
   static async generateDailySnapshot(businessId: string) {
@@ -35,7 +37,7 @@ export class AnalyticsEngine {
       workflowExecutions
     };
 
-    await prisma.analyticsSnapshot.create({
+    await db.analyticsSnapshot.create({
       data: {
         businessId,
         snapshotType: 'DAILY_BUSINESS',
@@ -55,12 +57,12 @@ export class AnalyticsEngine {
     
     if (totalExecutions > 20 && (failedExecutions / totalExecutions) > 0.1) {
       // Check if recommendation already exists to avoid duplicates
-      const exists = await prisma.improvementRecommendation.findFirst({
+      const exists = await db.improvementRecommendation.findFirst({
         where: { businessId, category: 'WORKFLOW_FAILURE', status: 'NEW' }
       });
       
       if (!exists) {
-        await prisma.improvementRecommendation.create({
+        await db.improvementRecommendation.create({
           data: {
             businessId,
             sourceType: 'WORKFLOW',
@@ -78,12 +80,12 @@ export class AnalyticsEngine {
     }
     
     // Check Agent Cost Insight
-    const agentExecutions = await prisma.agentExecution.findMany({
+    const agentExecutions = await db.agentExecution.findMany({
       where: { businessId },
       select: { tokenUsage: true }
     });
     let totalTokens = 0;
-    agentExecutions.forEach(e => {
+    agentExecutions.forEach((e: any) => {
        if (e.tokenUsage && typeof e.tokenUsage === 'object') {
            const usage = e.tokenUsage as { totalTokens?: number };
            totalTokens += (usage.totalTokens || 0);
@@ -91,12 +93,12 @@ export class AnalyticsEngine {
     });
     
     if (totalTokens > 500000) {
-      const exists = await prisma.improvementRecommendation.findFirst({
+      const exists = await db.improvementRecommendation.findFirst({
         where: { businessId, category: 'AI_COST', status: 'NEW' }
       });
       
       if (!exists) {
-        await prisma.improvementRecommendation.create({
+        await db.improvementRecommendation.create({
           data: {
             businessId,
             sourceType: 'AGENT',

@@ -1,5 +1,11 @@
 import { prisma } from '@agent-flux/database';
 import { operationalSyncService } from '../operations/OperationalSyncService';
+import {
+  SetupRequiredError,
+  PermissionDeniedError,
+  ColumnConflictError,
+  OperationalEntityType
+} from '../operations/types';
 
 class OperationalSyncPoller {
   private isRunning = false;
@@ -37,6 +43,20 @@ class OperationalSyncPoller {
       });
 
       for (const job of pendingJobs) {
+        // Atomic claim: only one worker processes this job
+        const claim = await prisma.operationalSyncJob.updateMany({
+          where: { id: job.id, status: job.status },
+          data: {
+            status: 'PROCESSING',
+            attemptCount: { increment: 1 }
+          }
+        });
+
+        if (claim.count === 0) {
+          // Another worker claimed or cancelled it
+          continue;
+        }
+
         await this.processJob(job);
       }
     } catch (error) {
@@ -46,96 +66,94 @@ class OperationalSyncPoller {
     }
   }
 
-  private async processJob(job: any) {
+  async processJob(job: any) {
     console.log(`[OperationalSyncPoller] Processing job ${job.id} for ${job.entityType} ${job.entityId}`);
-    
-    // Mark processing
-    await prisma.operationalSyncJob.update({
-      where: { id: job.id },
-      data: { status: 'PROCESSING', attemptCount: job.attemptCount + 1 }
-    });
 
     try {
-      if (job.entityType === 'ENQUIRY') {
-        await operationalSyncService.syncEnquiry(job.businessId, job.entityId);
-      } else if (job.entityType === 'CUSTOMER') {
-        await operationalSyncService.syncCustomer(job.businessId, job.entityId);
-      } else if (job.entityType === 'ORDER') {
-        if (job.operation.startsWith('DISPATCH_EVENT:')) {
-          const eventType = job.operation.split(':')[1];
-          const { EventBus } = require('../../services/eventBus');
-          await EventBus.publish(job.businessId, eventType, { orderId: job.entityId });
-        } else {
-          await operationalSyncService.syncOrder(job.businessId, job.entityId);
-        }
-      } else if (job.entityType === 'INVOICE') {
-        await operationalSyncService.syncInvoice(job.businessId, job.entityId);
-      } else {
-        throw new Error(`Unknown entity type: ${job.entityType}`);
+      if (job.operation && job.operation.startsWith('DISPATCH_EVENT:')) {
+        const eventType = job.operation.split(':')[1];
+        const { EventBus } = require('../../services/eventBus');
+        await EventBus.publish(job.businessId, eventType, {
+          [job.entityType.toLowerCase() + 'Id']: job.entityId
+        });
       }
 
-      // Success
+      // Single authoritative sync path
+      await operationalSyncService.syncEntity(
+        job.businessId,
+        job.entityType as OperationalEntityType,
+        job.entityId
+      );
+
+      // Job succeeded
       await prisma.operationalSyncJob.update({
         where: { id: job.id },
         data: {
           status: 'SUCCEEDED',
           completedAt: new Date(),
-          lastError: null
+          lastError: null,
+          nextAttemptAt: null
         }
       });
       console.log(`[OperationalSyncPoller] Job ${job.id} succeeded`);
 
+      // Reconcile business sheet status
+      await operationalSyncService.checkAndUpdateConfigStatus(job.businessId).catch(console.error);
+
     } catch (error: any) {
       console.error(`[OperationalSyncPoller] Job ${job.id} failed:`, error.message);
-      
-      const newAttemptCount = job.attemptCount + 1;
-      let nextStatus = 'RETRYING';
-      let nextAttemptAt = new Date();
 
-      // Non-retryable errors
-      const errorStr = error.message.toLowerCase();
-      if (
-        errorStr.includes('invalid configuration') || 
-        errorStr.includes('not found') || 
+      const currentAttempts = job.attemptCount + 1;
+      const errorMsg = error.message || '';
+      const errorStr = errorMsg.toLowerCase();
+
+      // Check if error is terminal / non-retryable
+      const isTerminal =
+        error instanceof SetupRequiredError ||
+        error instanceof ColumnConflictError ||
+        error instanceof PermissionDeniedError ||
+        errorStr.includes('setup_required') ||
+        errorStr.includes('column conflict') ||
         errorStr.includes('permission denied') ||
+        errorStr.includes('reconnection required') ||
+        errorStr.includes('not found') ||
         errorStr.includes('deleted') ||
-        newAttemptCount >= this.maxRetries
-      ) {
+        currentAttempts >= this.maxRetries;
+
+      let nextStatus = 'RETRYING';
+      let nextAttemptAt: Date | null = new Date();
+
+      if (isTerminal) {
         nextStatus = 'FAILED';
-        nextAttemptAt = null as any;
+        nextAttemptAt = null;
       } else {
-        // Exponential backoff: 10s, 30s, 90s, etc.
-        const delaySecs = 10 * Math.pow(3, job.attemptCount);
-        nextAttemptAt.setSeconds(nextAttemptAt.getSeconds() + delaySecs);
+        // Exponential backoff
+        const delaySecs = 10 * Math.pow(2, Math.min(job.attemptCount, 5));
+        nextAttemptAt = new Date(Date.now() + delaySecs * 1000);
       }
 
       await prisma.operationalSyncJob.update({
         where: { id: job.id },
         data: {
           status: nextStatus as any,
-          lastError: error.message,
-          nextAttemptAt
+          lastError: errorMsg,
+          nextAttemptAt,
+          completedAt: isTerminal ? new Date() : null
         }
       });
+
+      // Update business config status with error
+      await operationalSyncService.checkAndUpdateConfigStatus(job.businessId).catch(console.error);
     }
   }
 
-  async enqueue(businessId: string, entityType: 'ENQUIRY' | 'CUSTOMER' | 'ORDER' | 'INVOICE', entityId: string, operation: string) {
-    const job = await prisma.operationalSyncJob.create({
-      data: {
-        businessId,
-        entityType,
-        entityId,
-        operation
-      }
-    });
-    
-    // Attempt immediate processing asynchronously (optional)
-    setTimeout(() => {
-      if (!this.isRunning) this.poll();
-    }, 100);
-    
-    return job;
+  async enqueue(
+    businessId: string,
+    entityType: OperationalEntityType,
+    entityId: string,
+    operation: string
+  ) {
+    return operationalSyncService.enqueueSync(businessId, entityType, entityId, operation);
   }
 }
 

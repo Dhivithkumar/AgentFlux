@@ -1,6 +1,8 @@
 import { prisma } from '@agent-flux/database';
 import { PolicyEvaluationService } from './PolicyEvaluationService';
 
+const db = prisma as any;
+
 export class GovernanceService {
   /**
    * Evaluates if a given action requires approval based on the business's active governance policies.
@@ -10,7 +12,7 @@ export class GovernanceService {
     actionType: string,
     context: Record<string, any>
   ) {
-    const policies = await prisma.governancePolicy.findMany({
+    const policies = await db.governancePolicy.findMany({
       where: { businessId, active: true },
       include: {
         rules: {
@@ -22,12 +24,12 @@ export class GovernanceService {
       orderBy: { priority: 'desc' },
     });
 
-    if (policies.length === 0) {
+    if (!policies || policies.length === 0) {
       return { requiresApproval: false };
     }
 
     // Evaluate all rules across active policies, prioritizing by rule priority
-    const allRules = policies.flatMap(p => p.rules).sort((a, b) => b.priority - a.priority);
+    const allRules = policies.flatMap((p: any) => p.rules || []).sort((a: any, b: any) => (b.priority || 0) - (a.priority || 0));
 
     for (const rule of allRules) {
       const isMatch = PolicyEvaluationService.evaluate(rule.condition as any, context);
@@ -46,7 +48,7 @@ export class GovernanceService {
   // --- CRUD for Policies & Rules ---
 
   public static async createPolicy(businessId: string, data: { name: string; description?: string; priority?: number }) {
-    return prisma.governancePolicy.create({
+    return db.governancePolicy.create({
       data: {
         businessId,
         name: data.name,
@@ -61,7 +63,7 @@ export class GovernanceService {
     policyId: string, 
     data: { actionType: string; condition: any; priority?: number; allowSelfApproval?: boolean; approvalMode?: any }
   ) {
-    return prisma.approvalRule.create({
+    return db.approvalRule.create({
       data: {
         businessId,
         policyId,
@@ -75,7 +77,7 @@ export class GovernanceService {
   }
 
   public static async addRuleStep(ruleId: string, stepOrder: number, approverRole?: string, approverUserId?: string) {
-    return prisma.approvalRuleStep.create({
+    return db.approvalRuleStep.create({
       data: {
         ruleId,
         stepOrder,

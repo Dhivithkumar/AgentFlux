@@ -1,9 +1,22 @@
 import dotenv from 'dotenv';
 import path from 'path';
 
+import fs from 'fs';
+
 // Calculate path to .env file relative to this file's location (__dirname is apps/api/src or apps/api/dist)
-const envPath = path.resolve(__dirname, '../../../.env');
-dotenv.config({ path: envPath });
+const candidatePaths = [
+  path.resolve(__dirname, '../../.env'),
+  path.resolve(process.cwd(), '.env'),
+  path.resolve(process.cwd(), '../../.env'),
+  path.resolve(__dirname, '../../../.env')
+];
+
+for (const candidate of candidatePaths) {
+  if (fs.existsSync(candidate)) {
+    dotenv.config({ path: candidate });
+    break;
+  }
+}
 
 // Validate required environment variables
 const requiredEnvVars = [

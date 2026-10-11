@@ -2,7 +2,8 @@ import './env';
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-dotenv.config({ path: '../../.env' });
+import path from 'path';
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 import authRoutes from './routes/auth';
 import businessRoutes from './routes/businesses';
@@ -56,6 +57,9 @@ import agentsRoutes from './routes/agents';
 import analyticsRoutes from './routes/analytics';
 import aiRoutes from './routes/ai';
 
+import { formsRouter } from './routes/forms';
+
+app.use('/api/forms', formsRouter);
 app.use('/api/enquiries', enquiryRoutes);
 app.use('/api/operations', operationsRouter);
 app.use('/api/businesses/:businessId/orders', ordersRouter);
@@ -68,6 +72,9 @@ app.use('/api/businesses/:businessId/approvals', genericApprovalsRoutes);
 app.use('/api/businesses/:businessId/agents', agentsRoutes);
 app.use('/api/businesses/:businessId/analytics', analyticsRoutes);
 app.use('/api/businesses/:businessId/workflow-packs', workflowPacksRoutes);
+import financeRouter from './routes/finance';
+
+app.use('/api/businesses/:businessId/finance', financeRouter);
 app.use('/api/businesses/:businessId', paymentsRouter); // mounts /invoices/:invoiceId/payments and /payments/:paymentId/confirm
 app.use('/api/webhooks/payments', paymentWebhooksRouter);
 

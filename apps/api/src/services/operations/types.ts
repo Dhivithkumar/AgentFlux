@@ -1,17 +1,46 @@
+export type OperationalEntityType = 'CUSTOMER' | 'ENQUIRY' | 'FOLLOWUP' | 'ORDER' | 'QUOTATION' | 'INVOICE';
+
 export interface OperationalRow {
   id: string; // The stable identifier (e.g. Enquiry ID, Customer ID)
   data: Record<string, any>; // Column Name -> Value
 }
 
 export interface OperationalWorksheetSchema {
-  name: string; // e.g., 'Enquiries', 'Customers', 'Followups'
+  name: string; // e.g., 'Customers', 'Enquiries', 'Followups', 'Orders', 'Quotations', 'Invoices'
   headers: string[]; // List of column headers
+  idField: string; // Primary ID column name (e.g. 'Customer ID', 'Enquiry ID')
+}
+
+export interface SyncRecordsOptions {
+  idField?: string;
+  columnMapping?: Record<string, string>; // Schema Header -> Actual Sheet Header
 }
 
 export interface OperationalAdapter {
   initialize(spreadsheetName: string, schemas: OperationalWorksheetSchema[]): Promise<{ spreadsheetId: string, sheetMappings: Record<string, string> }>;
   getSpreadsheetUrl(spreadsheetId: string): string;
   verifyAccess(spreadsheetId: string): Promise<boolean>;
-  ensureWorksheetAndHeaders(spreadsheetId: string, schema: OperationalWorksheetSchema): Promise<string>;
-  syncRecords(spreadsheetId: string, worksheetName: string, records: OperationalRow[]): Promise<void>;
+  ensureWorksheetAndHeaders(spreadsheetId: string, schema: OperationalWorksheetSchema, customSheetName?: string): Promise<string>;
+  syncRecords(spreadsheetId: string, worksheetName: string, records: OperationalRow[], options?: SyncRecordsOptions): Promise<void>;
+}
+
+export class SetupRequiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SetupRequiredError';
+  }
+}
+
+export class ColumnConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ColumnConflictError';
+  }
+}
+
+export class PermissionDeniedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PermissionDeniedError';
+  }
 }

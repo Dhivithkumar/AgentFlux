@@ -3,6 +3,7 @@ import { GovernanceService } from '../services/governance/GovernanceService';
 import { prisma } from '@agent-flux/database';
 import { authenticate } from '../middleware/auth';
 
+const db = prisma as any;
 const router = Router({ mergeParams: true });
 
 router.use(authenticate);
@@ -22,7 +23,7 @@ router.use(async (req: any, res: any, next) => {
 // Policies
 router.get('/policies', async (req: any, res: any) => {
   const { businessId } = req.params;
-  const policies = await prisma.governancePolicy.findMany({
+  const policies = await db.governancePolicy.findMany({
     where: { businessId },
     include: { rules: true },
     orderBy: { priority: 'desc' }
@@ -38,7 +39,7 @@ router.post('/policies', async (req: any, res: any) => {
 
 router.patch('/policies/:id', async (req: any, res: any) => {
   const { businessId, id } = req.params;
-  const policy = await prisma.governancePolicy.update({
+  const policy = await db.governancePolicy.update({
     where: { id },
     data: req.body
   });
@@ -47,7 +48,7 @@ router.patch('/policies/:id', async (req: any, res: any) => {
 
 router.delete('/policies/:id', async (req: any, res: any) => {
   const { businessId, id } = req.params;
-  await prisma.governancePolicy.delete({
+  await db.governancePolicy.delete({
     where: { id }
   });
   res.json({ success: true, data: { deleted: true } });
@@ -56,7 +57,7 @@ router.delete('/policies/:id', async (req: any, res: any) => {
 // Rules
 router.get('/rules', async (req: any, res: any) => {
   const { businessId } = req.params;
-  const rules = await prisma.approvalRule.findMany({
+  const rules = await db.approvalRule.findMany({
     where: { businessId },
     include: { steps: true, policy: true },
     orderBy: { priority: 'desc' }
@@ -83,7 +84,7 @@ router.post('/rules', async (req: any, res: any) => {
     }
   }
 
-  const updatedRule = await prisma.approvalRule.findUnique({
+  const updatedRule = await db.approvalRule.findUnique({
     where: { id: rule.id },
     include: { steps: true }
   });
@@ -94,7 +95,7 @@ router.post('/rules', async (req: any, res: any) => {
 router.patch('/rules/:id', async (req: any, res: any) => {
   const { businessId, id } = req.params;
   const { steps, ...updateData } = req.body;
-  const rule = await prisma.approvalRule.update({
+  const rule = await db.approvalRule.update({
     where: { id },
     data: updateData
   });

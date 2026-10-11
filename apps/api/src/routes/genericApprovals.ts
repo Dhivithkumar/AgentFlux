@@ -3,6 +3,7 @@ import { prisma } from '@agent-flux/database';
 import { authenticate } from '../middleware/auth';
 import { ApprovalService } from '../services/governance/ApprovalService';
 
+const db = prisma as any;
 const router = Router({ mergeParams: true });
 router.use(authenticate);
 
@@ -20,7 +21,7 @@ router.use(async (req: any, res: any, next) => {
 
 router.get('/', async (req: any, res: any) => {
   const { businessId } = req.params;
-  const approvals = await prisma.approvalRequest.findMany({
+  const approvals = await db.approvalRequest.findMany({
     where: { businessId },
     include: { steps: true, decisions: true },
     orderBy: { createdAt: 'desc' }
@@ -30,7 +31,7 @@ router.get('/', async (req: any, res: any) => {
 
 router.get('/:id', async (req: any, res: any) => {
   const { businessId, id } = req.params;
-  const approval = await prisma.approvalRequest.findUnique({
+  const approval = await db.approvalRequest.findUnique({
     where: { id },
     include: { steps: true, decisions: true }
   });
@@ -67,15 +68,15 @@ router.post('/:id/request-changes', async (req: any, res: any) => {
   const { businessId, id } = req.params;
   const { comment } = req.body;
   try {
-    const request = await prisma.approvalRequest.findUnique({ where: { id } });
+    const request = await db.approvalRequest.findUnique({ where: { id } });
     if (!request || request.businessId !== businessId || request.status !== 'PENDING') {
       return res.status(400).json({ success: false, error: 'Invalid approval request' });
     }
-    const updated = await prisma.approvalRequest.update({
+    const updated = await db.approvalRequest.update({
       where: { id },
       data: { status: 'CHANGES_REQUESTED' }
     });
-    await prisma.approvalDecision.create({
+    await db.approvalDecision.create({
       data: { businessId, approvalRequestId: id, actorId: req.user!.id, decision: 'CHANGES_REQUESTED', comment }
     });
     res.json({ success: true, data: updated });
@@ -88,15 +89,15 @@ router.post('/:id/cancel', async (req: any, res: any) => {
   const { businessId, id } = req.params;
   const { comment } = req.body;
   try {
-    const request = await prisma.approvalRequest.findUnique({ where: { id } });
+    const request = await db.approvalRequest.findUnique({ where: { id } });
     if (!request || request.businessId !== businessId || request.status !== 'PENDING') {
       return res.status(400).json({ success: false, error: 'Invalid approval request' });
     }
-    const updated = await prisma.approvalRequest.update({
+    const updated = await db.approvalRequest.update({
       where: { id },
       data: { status: 'CANCELLED' }
     });
-    await prisma.approvalDecision.create({
+    await db.approvalDecision.create({
       data: { businessId, approvalRequestId: id, actorId: req.user!.id, decision: 'CANCELLED', comment }
     });
     res.json({ success: true, data: updated });

@@ -83,6 +83,30 @@ router.patch('/:id/customer', async (req: any, res) => {
     res.status(400).json({ error: error.message });
   }
 });
+router.post('/:id/approve', async (req: any, res) => {
+  try {
+    const { businessId, id } = req.params;
+    const { comment } = req.body;
+    const userId = (req as any).user.id;
+    const order = await orderService.approveOrder(businessId, id, userId, comment);
+    res.json(order);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+router.post('/:id/reject', async (req: any, res) => {
+  try {
+    const { businessId, id } = req.params;
+    const { reason } = req.body;
+    const userId = (req as any).user.id;
+    const order = await orderService.rejectOrder(businessId, id, userId, reason);
+    res.json(order);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 router.post('/:id/status', async (req: any, res) => {
   try {
     const { businessId, id } = req.params;

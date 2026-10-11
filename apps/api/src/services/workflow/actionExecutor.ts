@@ -64,21 +64,35 @@ export class ActionExecutor {
         
         accessToken = newTokens.accessToken;
 
-        // Save new tokens
-        await prisma.integrationCredential.update({
-          where: { id: integration.credential.id },
+        // Save new tokens with optimistic concurrency control
+        const updateResult = await prisma.integrationCredential.updateMany({
+          where: { 
+            id: integration.credential.id,
+            accessTokenEncrypted: integration.credential.accessTokenEncrypted 
+          },
           data: {
             accessTokenEncrypted: encrypt(newTokens.accessToken),
-            refreshTokenEncrypted: newTokens.refreshToken ? encrypt(newTokens.refreshToken) : undefined,
+            refreshTokenEncrypted: newTokens.refreshToken ? encrypt(newTokens.refreshToken) : integration.credential.refreshTokenEncrypted,
             expiresAt: newTokens.expiresIn ? new Date(Date.now() + newTokens.expiresIn * 1000) : null
           }
         });
-      } catch (err) {
-        await prisma.integration.update({
-          where: { id: integration.id },
-          data: { status: IntegrationStatus.RECONNECT_REQUIRED }
-        });
-        throw new Error(`Failed to refresh token for '${connectorId}'. Reconnection required. Error: ${err}`);
+        
+        if (updateResult.count === 0) {
+          const latestCreds = await prisma.integrationCredential.findUnique({ where: { id: integration.credential.id } });
+          if (latestCreds) {
+            accessToken = decrypt(latestCreds.accessTokenEncrypted);
+          }
+        }
+      } catch (err: any) {
+        console.error(`[ActionExecutor] Failed to refresh token for '${connectorId}':`, err.message);
+        const isAuthError = err.response?.status === 400 || err.response?.status === 401 || err.message?.includes('invalid_grant');
+        if (isAuthError) {
+            await prisma.integration.update({
+              where: { id: integration.id },
+              data: { status: IntegrationStatus.RECONNECT_REQUIRED }
+            });
+        }
+        throw new Error(`Failed to refresh token for '${connectorId}'. Error: ${err.message}`);
       }
     }
 

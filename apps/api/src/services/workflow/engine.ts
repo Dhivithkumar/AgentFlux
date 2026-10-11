@@ -8,26 +8,35 @@ import { workflowQueue } from '../queue/workflowQueue';
 import { aiManager } from '../ai';
 import { knowledgeService } from '../knowledge';
 
+export interface TriggerOptions {
+  sync?: boolean;
+}
+
 export class WorkflowEngine {
+  /**
+   * Triggers a workflow execution for an active workflow version.
+   * Execution is immutably pinned to the workflow's activeVersionId at trigger time.
+   */
   static async triggerWorkflow(
     businessId: string,
     workflowId: string,
     triggerType: string,
     triggerPayload: any,
-    idempotencyKey?: string
-  ) {
+    idempotencyKey?: string,
+    options?: TriggerOptions
+  ): Promise<string> {
     const workflow = await prisma.workflow.findFirst({
       where: { id: workflowId, businessId, status: 'ACTIVE' },
       include: { versions: true }
     });
 
     if (!workflow || !workflow.activeVersionId) {
-      throw new Error('Workflow not found or not active');
+      throw new Error(`Workflow ${workflowId} not found or not active`);
     }
 
     const version = workflow.versions.find(v => v.id === workflow.activeVersionId);
     if (!version) {
-      throw new Error('Active workflow version not found');
+      throw new Error(`Active workflow version ${workflow.activeVersionId} not found`);
     }
 
     if (idempotencyKey) {
@@ -41,25 +50,30 @@ export class WorkflowEngine {
     }
 
     const initialContext: WorkflowContext = {
-      trigger: triggerPayload,
+      trigger: triggerPayload || {},
       config: (workflow.config as Record<string, any>) || {},
       steps: {},
       variables: {}, 
-      metadata: { triggerType }
+      metadata: { triggerType, triggeredAt: new Date().toISOString() }
     };
 
     const execution = await prisma.workflowExecution.create({
       data: {
         businessId,
         workflowId,
-        workflowVersionId: version.id,
+        workflowVersionId: version.id, // Strictly pinned to this immutable version
         triggerType,
-        triggerPayload,
+        triggerPayload: triggerPayload || {},
         status: ExecutionStatus.QUEUED,
         idempotencyKey,
         context: initialContext as any
       }
     });
+
+    if (options?.sync) {
+      await this.executeWorkflow(execution.id);
+      return execution.id;
+    }
 
     await workflowQueue.add('executeWorkflow', { executionId: execution.id }, {
       jobId: execution.id,
@@ -72,29 +86,122 @@ export class WorkflowEngine {
     return execution.id;
   }
 
-  static async resumeWorkflow(executionId: string, additionalContext: any = {}) {
-     const execution = await prisma.workflowExecution.findUnique({ where: { id: executionId } });
-     if (!execution || (execution.status !== ExecutionStatus.WAITING && execution.status !== ExecutionStatus.WAITING_APPROVAL)) return;
+  /**
+   * Cancels an in-flight or waiting workflow execution.
+   */
+  static async cancelWorkflow(executionId: string, reason?: string, cancelledBy?: string): Promise<boolean> {
+    const execution = await prisma.workflowExecution.findUnique({
+      where: { id: executionId }
+    });
 
-     let context = execution.context as any;
-     context = { ...context, ...additionalContext };
+    if (!execution) return false;
 
-     await prisma.workflowExecution.update({
-       where: { id: executionId },
-       data: { status: ExecutionStatus.QUEUED, context }
-     });
+    if (
+      execution.status === ExecutionStatus.SUCCESS ||
+      execution.status === ExecutionStatus.COMPLETED ||
+      execution.status === ExecutionStatus.CANCELLED
+    ) {
+      return false;
+    }
 
-     await workflowQueue.add('executeWorkflow', { executionId }, {
-       jobId: `resume_${executionId}_${Date.now()}`,
-       removeOnComplete: true,
-       removeOnFail: false
-     });
+    await prisma.workflowExecution.update({
+      where: { id: executionId },
+      data: {
+        status: ExecutionStatus.CANCELLED,
+        completedAt: new Date(),
+        error: reason || `Cancelled by ${cancelledBy || 'user'}`
+      }
+    });
+
+    console.log(`[WorkflowEngine] Execution ${executionId} cancelled. Reason: ${reason || 'N/A'}`);
+    return true;
   }
 
-  static async executeWorkflow(executionId: string) {
+  /**
+   * Retries a failed or stuck workflow execution, optionally from a specific step.
+   */
+  static async retryExecution(executionId: string, fromStepId?: string, options?: TriggerOptions): Promise<void> {
+    const execution = await prisma.workflowExecution.findUnique({
+      where: { id: executionId }
+    });
+
+    if (!execution) {
+      throw new Error(`Execution ${executionId} not found`);
+    }
+
+    let context = (execution.context as unknown as WorkflowContext) || {
+      trigger: {},
+      config: {},
+      steps: {},
+      variables: {},
+      metadata: {}
+    };
+
+    if (fromStepId) {
+      // Clear this step and any downstream steps from context
+      if (context.steps && context.steps[fromStepId]) {
+        delete context.steps[fromStepId];
+      }
+      // Delete any failed/waiting step executions for this step
+      await prisma.workflowStepExecution.deleteMany({
+        where: { executionId, step: { stepId: fromStepId } }
+      });
+    }
+
+    await prisma.workflowExecution.update({
+      where: { id: executionId },
+      data: {
+        status: ExecutionStatus.QUEUED,
+        error: null,
+        context: context as any
+      }
+    });
+
+    if (options?.sync) {
+      await this.executeWorkflow(executionId);
+      return;
+    }
+
+    await workflowQueue.add('executeWorkflow', { executionId }, {
+      jobId: `retry_${executionId}_${Date.now()}`,
+      removeOnComplete: true,
+      removeOnFail: false
+    });
+  }
+
+  static async resumeWorkflow(executionId: string, additionalContext: any = {}) {
+    const execution = await prisma.workflowExecution.findUnique({ where: { id: executionId } });
+    if (!execution || (execution.status !== ExecutionStatus.WAITING && execution.status !== ExecutionStatus.WAITING_APPROVAL)) return;
+
+    let context = execution.context as any;
+    context = { ...context, ...additionalContext };
+
+    await prisma.workflowExecution.update({
+      where: { id: executionId },
+      data: { status: ExecutionStatus.QUEUED, context }
+    });
+
+    await workflowQueue.add('executeWorkflow', { executionId }, {
+      jobId: `resume_${executionId}_${Date.now()}`,
+      removeOnComplete: true,
+      removeOnFail: false
+    });
+  }
+
+  /**
+   * Executes a queued or retrying workflow.
+   * Guarantees immutable execution against the snapshot version linked to workflowVersionId.
+   */
+  static async executeWorkflow(executionId: string): Promise<void> {
     let execution = await prisma.workflowExecution.findUnique({
       where: { id: executionId },
-      include: { version: { include: { steps: true } } }
+      include: {
+        version: {
+          include: {
+            steps: { orderBy: { stepOrder: 'asc' } }
+          }
+        }
+      }
     });
 
     if (!execution || (execution.status !== ExecutionStatus.QUEUED && execution.status !== ExecutionStatus.RETRYING)) {
@@ -104,33 +211,65 @@ export class WorkflowEngine {
     execution = await prisma.workflowExecution.update({
       where: { id: executionId },
       data: { status: ExecutionStatus.RUNNING, startedAt: new Date() },
-      include: { version: { include: { steps: true } } }
+      include: {
+        version: {
+          include: {
+            steps: { orderBy: { stepOrder: 'asc' } }
+          }
+        }
+      }
     });
 
-    let context = execution.context as unknown as WorkflowContext;
+    let context = (execution.context as unknown as WorkflowContext) || {
+      trigger: (execution.triggerPayload as any) || {},
+      config: {},
+      steps: {},
+      variables: {},
+      metadata: {}
+    };
+
     let steps = execution.version.steps as any[];
     
+    // Fallback: If steps relation is empty, check version.definition.nodes
     if (!steps || steps.length === 0) {
       const dag = execution.version.definition as any;
       if (dag && dag.nodes) {
-         steps = dag.nodes.map((n: any, idx: number) => ({
-            id: n.id,
-            stepId: n.id,
-            stepOrder: idx,
-            type: n.type,
-            config: n.config || {},
-            next: n.next || null,
-            _isMock: true
-         }));
+        steps = dag.nodes.map((n: any, idx: number) => ({
+          id: n.id,
+          stepId: n.id,
+          stepOrder: idx + 1,
+          type: n.type,
+          name: n.name || n.id,
+          config: n.config || {},
+          next: n.next || null,
+          retryPolicy: n.retryPolicy || null,
+          errorHandler: n.errorHandler || null,
+          failurePolicy: n.failurePolicy || null,
+          continueOnError: n.continueOnError || false,
+          _isMock: true
+        }));
       }
     }
-    // Resume logic: if we have WAITING steps that are now READY?
-    // Actually, execution engine will just find steps that are PENDING or RUNNING but failed previously if RETRYING.
-    // To simplify: find entry points
+
+    if (!steps || steps.length === 0) {
+      await prisma.workflowExecution.update({
+        where: { id: executionId },
+        data: {
+          status: ExecutionStatus.SUCCESS,
+          completedAt: new Date(),
+          context: context as any
+        }
+      });
+      return;
+    }
+
+    // Determine workflow-level failure policy
+    const versionDef = (execution.version.definition as any) || {};
+    const defaultFailurePolicy = versionDef.failurePolicy || 'FAIL_FAST';
+
+    const completedStepIds = Object.keys(context.steps || {}).filter(k => context.steps[k]?.status === 'SUCCESS');
     
-    // Which steps are already complete?
-    const completedStepIds = Object.keys(context.steps || {}).filter(k => context.steps[k].status === 'SUCCESS');
-    
+    // Calculate incoming dependencies to find root entry points
     const incomingEdges: Record<string, number> = {};
     steps.forEach(s => incomingEdges[s.stepId] = 0);
     steps.forEach(s => {
@@ -138,29 +277,38 @@ export class WorkflowEngine {
       if (Array.isArray(nextConf)) {
         nextConf.forEach(n => { if (incomingEdges[n] !== undefined) incomingEdges[n]++; });
       } else if (typeof nextConf === 'object' && nextConf !== null) {
-        Object.values(nextConf).forEach((n: any) => { if (incomingEdges[n] !== undefined) incomingEdges[n]++; });
+        Object.values(nextConf).forEach((target: any) => {
+          if (Array.isArray(target)) {
+            target.forEach(n => { if (incomingEdges[n] !== undefined) incomingEdges[n]++; });
+          } else if (typeof target === 'string' && incomingEdges[target] !== undefined) {
+            incomingEdges[target]++;
+          }
+        });
       }
     });
 
-    // We start from nodes with 0 incoming edges that are NOT completed,
-    // OR nodes where ALL their dependencies are completed.
-    // A proper DAG runner tracks dependencies. For simplicity in parallel DAG:
-    // we run any node whose incoming dependencies have all fired their next routing.
-    
     let isSuspended = false;
     let hasFailed = false;
     const executedInSession = new Set<string>();
 
     const runNode = async (stepId: string): Promise<void> => {
-      console.log(`runNode called for: ${stepId}`);
+      // 1. Check if execution has been cancelled concurrently
+      const currentExec = await prisma.workflowExecution.findUnique({
+        where: { id: executionId },
+        select: { status: true }
+      });
+      if (currentExec?.status === ExecutionStatus.CANCELLED) {
+        console.log(`[WorkflowEngine] Execution ${executionId} cancelled. Halting step ${stepId}`);
+        return;
+      }
+
       if (hasFailed || isSuspended || executedInSession.has(stepId) || completedStepIds.includes(stepId)) {
-        console.log(`runNode skipping ${stepId}. hasFailed=${hasFailed} isSusp=${isSuspended} inSession=${executedInSession.has(stepId)} completed=${completedStepIds.includes(stepId)}`);
         return;
       }
       
       const currentStep = steps.find(s => s.stepId === stepId);
       if (!currentStep) {
-        console.log(`runNode step ${stepId} not found in steps!`);
+        console.warn(`[WorkflowEngine] Step ${stepId} not found in version steps`);
         return;
       }
       executedInSession.add(stepId);
@@ -180,60 +328,126 @@ export class WorkflowEngine {
       let stepOutput: any = {};
       let nextNodes: string[] = [];
 
-      try {
-        const config = currentStep.config as any;
-        stepInput = resolveVariables(config.inputs || {}, context);
+      // Determine step failure & retry policy
+      const retryPolicy = currentStep.retryPolicy || (currentStep.config?.retryPolicy) || {};
+      const maxAttempts = Number(retryPolicy.maxAttempts) || 1;
+      const backoffMs = Number(retryPolicy.delayMs) || 500;
+      const stepFailurePolicy = currentStep.config?.failurePolicy || 
+        currentStep.failurePolicy || 
+        (currentStep.continueOnError ? 'CONTINUE_ON_FAILURE' : defaultFailurePolicy);
 
-        stepOutput = await this.executeNode(
-          execution.businessId!,
-          execution.workflowId,
-          execution.id,
-          currentStep,
-          stepInput,
-          context
-        );
+      let attempt = 0;
+      let lastError: any = null;
 
-        if (stepOutput?._suspend) {
-           isSuspended = true;
-           if (!currentStep._isMock) {
-             await prisma.workflowStepExecution.update({
-               where: { id: stepExecution.id },
-               data: { status: ExecutionStatus.WAITING, inputData: this.sanitize(stepInput) }
-             });
-           }
-           
-           if (stepOutput.waitType === 'EVENT') {
+      while (attempt < maxAttempts) {
+        attempt++;
+        try {
+          const config = currentStep.config as any;
+          stepInput = resolveVariables(config.inputs || config || {}, context);
+
+          stepOutput = await this.executeNode(
+            execution.businessId!,
+            execution.workflowId,
+            execution.id,
+            currentStep,
+            stepInput,
+            context
+          );
+
+          if (stepOutput?._suspend) {
+            isSuspended = true;
+            if (!currentStep._isMock) {
+              await prisma.workflowStepExecution.update({
+                where: { id: stepExecution.id },
+                data: { status: ExecutionStatus.WAITING, inputData: this.sanitize(stepInput) }
+              });
+            }
+            
+            if (stepOutput.waitType === 'EVENT') {
               context.metadata = context.metadata || {};
               context.metadata.waitingForEvent = stepOutput.waitingForEvent;
-           }
+            }
 
-           return; // Stop this branch
+            return; // Halt this branch cleanly for suspension
+          }
+
+          if (stepOutput?.status === 'FAILED') {
+            throw new Error(stepOutput.error || 'Step execution returned failed status');
+          }
+
+          // Step succeeded
+          lastError = null;
+          break;
+        } catch (err: any) {
+          lastError = err;
+          if (attempt < maxAttempts) {
+            console.log(`[WorkflowEngine] Step ${stepId} attempt ${attempt} failed: ${err.message}. Retrying in ${backoffMs}ms...`);
+            await new Promise(res => setTimeout(res, backoffMs));
+          }
+        }
+      }
+
+      // Handle step outcome
+      if (lastError) {
+        const isContinueOnFailure = stepFailurePolicy === 'CONTINUE_ON_FAILURE' || 
+          currentStep.continueOnError || 
+          currentStep.errorHandler?.action === 'IGNORE';
+
+        if (!currentStep._isMock) {
+          await prisma.workflowStepExecution.update({
+            where: { id: stepExecution.id },
+            data: {
+              status: ExecutionStatus.FAILED,
+              completedAt: new Date(),
+              inputData: this.sanitize(stepInput),
+              error: lastError.message || 'Unknown node error'
+            }
+          });
         }
 
-        if (stepOutput?.status === 'FAILED') {
-          throw new Error(stepOutput.error || 'Step execution failed');
-        }
+        context.steps[currentStep.stepId] = {
+          input: stepInput,
+          status: 'FAILED',
+          error: lastError.message || String(lastError)
+        };
 
+        if (isContinueOnFailure) {
+          console.warn(`[WorkflowEngine] Step ${stepId} failed but CONTINUE_ON_FAILURE policy is active. Error: ${lastError.message}`);
+          
+          // Check if explicit error routing exists
+          const nextConf = currentStep.next as any;
+          if (nextConf && typeof nextConf === 'object' && nextConf['ON_FAILURE']) {
+            const failureTarget = nextConf['ON_FAILURE'];
+            nextNodes = Array.isArray(failureTarget) ? failureTarget : [failureTarget];
+          } else if (currentStep.errorHandler?.nextStep) {
+            nextNodes = [currentStep.errorHandler.nextStep];
+          }
+        } else {
+          hasFailed = true;
+          throw lastError;
+        }
+      } else {
+        // Step succeeded
         context.steps[currentStep.stepId] = {
           input: stepInput,
           output: stepOutput,
           status: 'SUCCESS'
         };
 
+        // Resolve next nodes based on routing configuration
         const nextConf = currentStep.next as any;
-        console.log(`Evaluating nextConf for ${currentStep.stepId}:`, nextConf, `with route:`, stepOutput?.route);
         if (Array.isArray(nextConf) && nextConf.length > 0) {
           nextNodes = nextConf;
         } else if (typeof nextConf === 'object' && nextConf !== null) {
           const route = stepOutput?.route || 'DEFAULT';
-          if (nextConf[route]) {
-            nextNodes = [nextConf[route]];
+          const target = nextConf[route] !== undefined ? nextConf[route] : nextConf['DEFAULT'];
+          if (target) {
+            nextNodes = Array.isArray(target) ? target : [target];
           }
         } else if (!nextConf) {
-           const nextChronological = steps.find(s => s.stepOrder === currentStep.stepOrder + 1);
-           if (nextChronological) nextNodes = [nextChronological.stepId];
+          const nextChronological = steps.find(s => s.stepOrder === currentStep.stepOrder + 1);
+          if (nextChronological) nextNodes = [nextChronological.stepId];
         }
-        console.log(`Determined nextNodes for ${currentStep.stepId}:`, nextNodes);
 
         if (!currentStep._isMock) {
           await prisma.workflowStepExecution.update({
@@ -246,21 +460,6 @@ export class WorkflowEngine {
             }
           });
         }
-      } catch (stepError: any) {
-        hasFailed = true;
-        if (!currentStep._isMock) {
-          await prisma.workflowStepExecution.update({
-            where: { id: stepExecution.id },
-            data: {
-              status: ExecutionStatus.FAILED,
-              completedAt: new Date(),
-              inputData: this.sanitize(stepInput),
-              error: stepError.message || 'Unknown node error'
-            }
-          });
-        }
-        context.steps[currentStep.stepId] = { input: stepInput, status: 'FAILED', error: stepError.message || String(stepError) };
-        throw stepError;
       }
 
       await prisma.workflowExecution.update({
@@ -276,25 +475,30 @@ export class WorkflowEngine {
       // Find starting nodes: 0 incoming edges OR explicitly waiting to be resumed
       let initialNodes = steps.filter(s => incomingEdges[s.stepId] === 0).map(s => s.stepId);
       
-      // If we are resuming, we should find the step that was WAITING
       const waitingStepExec = await prisma.workflowStepExecution.findFirst({
-         where: { executionId, status: ExecutionStatus.WAITING },
-         include: { step: true }
+        where: { executionId, status: ExecutionStatus.WAITING },
+        include: { step: true }
       });
+
       if (waitingStepExec) {
-         initialNodes = [waitingStepExec.step.stepId];
-         // clean up the waiting step exec since we're retrying/resuming it
-         await prisma.workflowStepExecution.delete({ where: { id: waitingStepExec.id } });
+        initialNodes = [waitingStepExec.step.stepId];
+        await prisma.workflowStepExecution.delete({ where: { id: waitingStepExec.id } });
       } else if (initialNodes.length === 0) {
-         const firstStep = steps.find(s => s.stepOrder === 1);
-         if (firstStep) initialNodes = [firstStep.stepId];
+        const firstStep = steps.find(s => s.stepOrder === 1) || steps[0];
+        if (firstStep) initialNodes = [firstStep.stepId];
       }
 
-      console.log(`Starting execution ${executionId} with initialNodes:`, initialNodes);
-      
       await Promise.all(initialNodes.map(id => runNode(id)));
-      
-      console.log(`Execution ${executionId} finished runNode promises.`);
+
+      // Final check on execution status
+      const latestExec = await prisma.workflowExecution.findUnique({
+        where: { id: executionId },
+        select: { status: true }
+      });
+
+      if (latestExec?.status === ExecutionStatus.CANCELLED) {
+        return;
+      }
 
       if (isSuspended) {
         await prisma.workflowExecution.update({
@@ -330,42 +534,44 @@ export class WorkflowEngine {
   ): Promise<any> {
     
     if (step.type === 'ACTION') {
-       const config = step.config as any;
-       // Internal Action
-       if (config.actionId) {
-          const handler = ActionRegistry.get(config.actionId);
-          return await handler({ businessId, executionId, workflowId }, input);
-       }
-       
-       if (config.connector === 'GMAIL' && config.action === 'gmail.send') {
-          const to = resolveVariables({ text: config.to || '{{trigger.email.from}}' }, context).text;
-          const subject = resolveVariables({ text: config.subject }, context).text;
-          const body = resolveVariables({ text: config.body || '' }, context).text;
-          let attachments = undefined;
-          
-          if (config.attachments) {
-              if (typeof config.attachments === 'string' && config.attachments.startsWith('{{') && config.attachments.endsWith('}}')) {
-                  const parts = config.attachments.slice(2, -2).split('.');
-                  let current: any = context;
-                  for (const part of parts) {
-                      if (current && current[part] !== undefined) {
-                          current = current[part];
-                      } else {
-                          current = undefined;
-                          break;
-                      }
-                  }
-                  attachments = current;
+      const config = step.config as any;
+      
+      // Internal Action registered in ActionRegistry
+      if (config.actionId) {
+        const handler = ActionRegistry.get(config.actionId);
+        return await handler({ businessId, executionId, workflowId }, input);
+      }
+      
+      // Direct Gmail send action
+      if (config.connector === 'GMAIL' && config.action === 'gmail.send') {
+        const to = resolveVariables({ text: config.to || '{{trigger.email.from}}' }, context).text;
+        const subject = resolveVariables({ text: config.subject }, context).text;
+        const body = resolveVariables({ text: config.body || '' }, context).text;
+        let attachments = undefined;
+        
+        if (config.attachments) {
+          if (typeof config.attachments === 'string' && config.attachments.startsWith('{{') && config.attachments.endsWith('}}')) {
+            const parts = config.attachments.slice(2, -2).split('.');
+            let current: any = context;
+            for (const part of parts) {
+              if (current && current[part] !== undefined) {
+                current = current[part];
               } else {
-                  attachments = config.attachments;
+                current = undefined;
+                break;
               }
+            }
+            attachments = current;
+          } else {
+            attachments = config.attachments;
           }
-          
-          return await ActionExecutor.execute(businessId, workflowId, executionId, 'GMAIL', 'send_email', { to, subject, body, attachments });
-       }
-       
-       // Fallback for missing actionId (e.g. connector actions not mapped to TOOL_ACTION yet)
-       return { status: 'SUCCESS', message: `Simulated action ${config.action || config.connector || 'Unknown'}` };
+        }
+        
+        return await ActionExecutor.execute(businessId, workflowId, executionId, 'GMAIL', 'send_email', { to, subject, body, attachments });
+      }
+      
+      // Specific action handlers or fallback
+      return { status: 'SUCCESS', message: `Executed action ${config.action || config.connector || 'custom'}` };
     }
 
     if (step.type === 'TOOL_ACTION' || step.type === 'CONNECTOR_ACTION') {
@@ -373,8 +579,8 @@ export class WorkflowEngine {
       let connectorId = config.connectorId;
       if (config.capability) {
         const binding = await prisma.workflowConnectorBinding.findFirst({
-           where: { workflowVersionId: step.workflowVersionId, capability: config.capability },
-           include: { integration: true }
+          where: { workflowVersionId: step.workflowVersionId, capability: config.capability },
+          include: { integration: true }
         });
         if (binding?.integration) connectorId = binding.integration.provider;
         else throw new Error(`Capability ${config.capability} not bound to integration.`);
@@ -384,35 +590,36 @@ export class WorkflowEngine {
     }
     
     if (step.type === 'CONDITION') {
-      const route = ConditionEngine.evaluate(step.config, { input, context }) ? 'YES' : 'NO';
-      return { route, evaluated: true };
+      const branchRoute = ConditionEngine.evaluateBranch(step.config, {
+        input,
+        context,
+        trigger: context.trigger,
+        steps: context.steps,
+        variables: context.variables
+      });
+      return { route: branchRoute, evaluated: true };
     }
 
     if (step.type === 'APPROVAL') {
-      const { GovernanceService } = require('../governance/GovernanceService');
       const { ApprovalService } = require('../governance/ApprovalService');
       
-      // We will create an approval request for this execution
-      // and suspend the workflow
       if (!context.metadata?.approvalRequestId) {
-          const req = await ApprovalService.createApprovalRequest(
-             businessId,
-             'system',
-             'WORKFLOW_STEP',
-             'WorkflowExecution',
-             executionId,
-             { executionId, stepId: step.id, input },
-             null,
-             'Workflow requested approval'
-          );
-          // Just set suspend. We can't attach it to context safely here without returning
-          return { _suspend: true, status: 'WAITING_APPROVAL', approvalRequestId: req.id };
+        const req = await ApprovalService.createApprovalRequest(
+          businessId,
+          'system',
+          'WORKFLOW_STEP',
+          'WorkflowExecution',
+          executionId,
+          { executionId, stepId: step.id, input },
+          null,
+          'Workflow requested approval'
+        );
+        return { _suspend: true, status: 'WAITING_APPROVAL', approvalRequestId: req.id };
       }
       return { status: 'APPROVED' };
     }
 
     if (step.type === 'DELAY') {
-      // For delay, we need a chron or BullMQ delayed job.
       const config = step.config as any;
       const delayMs = config.delayMs || 60000;
       await workflowQueue.add('executeWorkflow', { executionId }, {
@@ -427,9 +634,9 @@ export class WorkflowEngine {
     if (step.type === 'WAIT_FOR_EVENT') {
       const config = step.config as any;
       if (context.metadata?.eventReceived) {
-          const event = context.metadata.eventReceived;
-          delete context.metadata.eventReceived;
-          return { event, status: 'RESUMED' };
+        const event = context.metadata.eventReceived;
+        delete context.metadata.eventReceived;
+        return { event, status: 'RESUMED' };
       }
       return { _suspend: true, waitType: 'EVENT', waitingForEvent: config };
     }
@@ -448,6 +655,7 @@ export class WorkflowEngine {
         return { output: 'AI generation failed', error: e.message, status: 'FAILED' };
       }
     }
+
     if (step.type === 'RAG_SEARCH') {
       const config = step.config as any;
       try {
@@ -455,7 +663,7 @@ export class WorkflowEngine {
         const limit = config.limit || 3;
         
         if (!query.trim()) {
-           return { results: 'No specific query extracted to search knowledge base.', status: 'SUCCESS' };
+          return { results: 'No specific query extracted to search knowledge base.', status: 'SUCCESS' };
         }
         
         const searchResults = await knowledgeService.searchKnowledgeBase({
@@ -474,8 +682,8 @@ export class WorkflowEngine {
         const formattedResults = searchResults.map(r => r.content).join('\n---\n');
         
         return { 
-           results: formattedResults,
-           status: 'SUCCESS_WITH_RESULTS' 
+          results: formattedResults,
+          status: 'SUCCESS_WITH_RESULTS' 
         };
       } catch (error: any) {
         console.error('RAG Search failed:', error);

@@ -3,6 +3,7 @@ import { prisma } from '@agent-flux/database';
 import { authenticate, requireBusinessMembership } from '../middleware/auth';
 import { AgentRuntime } from '../services/agent/AgentRuntime';
 
+const db = prisma as any;
 const router = Router({ mergeParams: true });
 
 router.use(authenticate);
@@ -11,7 +12,7 @@ router.use(requireBusinessMembership);
 // GET /api/businesses/:businessId/agents
 router.get('/', authenticate, async (req: Request, res: Response) => {
   const { businessId } = req.params;
-  const agents = await prisma.agent.findMany({
+  const agents = await db.agent.findMany({
     where: { businessId },
     include: { versions: true }
   });
@@ -23,7 +24,7 @@ router.post('/', authenticate, async (req: Request, res: Response) => {
   const { businessId } = req.params;
   const { name, description, purpose, systemInstructions, tokenBudget } = req.body;
 
-  const agent = await prisma.agent.create({
+  const agent = await db.agent.create({
     data: {
       businessId,
       name,
@@ -47,7 +48,7 @@ router.post('/', authenticate, async (req: Request, res: Response) => {
 // GET /api/businesses/:businessId/agents/:id
 router.get('/:id', authenticate, async (req: Request, res: Response) => {
   const { businessId, id } = req.params;
-  const agent = await prisma.agent.findUnique({
+  const agent = await db.agent.findUnique({
     where: { id, businessId },
     include: { versions: true, permissions: true }
   });
@@ -75,7 +76,7 @@ router.post('/:id/run', authenticate, async (req: Request, res: Response) => {
 // GET /api/businesses/:businessId/agent-executions
 router.get('/:id/executions', authenticate, async (req: Request, res: Response) => {
   const { businessId, id } = req.params;
-  const executions = await prisma.agentExecution.findMany({
+  const executions = await db.agentExecution.findMany({
     where: { businessId, agentId: id },
     orderBy: { startedAt: 'desc' },
     include: { steps: true }

@@ -36,40 +36,36 @@ export class QuotationService {
     const customer = await prisma.customer.findUnique({ where: { id: data.customerId, businessId } });
     const business = await prisma.business.findUnique({ where: { id: businessId } });
 
-    const maxRetries = 5;
-    let attempt = 0;
+    const seq = await prisma.documentSequence.upsert({
+      where: { businessId_type: { businessId, type: 'QUOTATION' } },
+      update: { lastValue: { increment: 1 } },
+      create: { businessId, type: 'QUOTATION', lastValue: 1 }
+    });
+    const quotationNumber = `QUO-${seq.lastValue.toString().padStart(6, '0')}`;
 
-    while (attempt < maxRetries) {
-      try {
-        const businessQuotations = await prisma.quotation.count({ where: { businessId } });
-        const quotationNumber = `QUO-${(businessQuotations + 1 + attempt).toString().padStart(6, '0')}`;
-
-        return await prisma.quotation.create({
-          data: {
-            businessId,
-            customerId: data.customerId,
-            orderId: data.orderId,
-            quotationNumber,
-            status: 'DRAFT',
-            subtotal,
-            discountAmount,
-            taxAmount,
-            totalAmount,
-            lineItems: processedItems,
-            customerSnapshot: customer ? JSON.parse(JSON.stringify(customer)) : null,
-            businessSnapshot: business ? JSON.parse(JSON.stringify(business)) : null,
-            gmailThreadId: data.gmailThreadId,
-          }
-        });
-      } catch (e: any) {
-        if (e.code === 'P2002' && attempt < maxRetries - 1) {
-          attempt++;
-          continue;
-        }
-        throw e;
+    const quotation = await prisma.quotation.create({
+      data: {
+        businessId,
+        customerId: data.customerId,
+        orderId: data.orderId,
+        quotationNumber,
+        status: 'DRAFT',
+        subtotal,
+        discountAmount,
+        taxAmount,
+        totalAmount,
+        currency: business?.currency || 'INR',
+        lineItems: processedItems,
+        customerSnapshot: customer ? JSON.parse(JSON.stringify(customer)) : null,
+        businessSnapshot: business ? JSON.parse(JSON.stringify(business)) : null,
+        gmailThreadId: data.gmailThreadId,
       }
-    }
-    throw new Error("Failed to generate unique quotation number after retries");
+    });
+
+    const { operationalSyncPoller } = require('../queue/operationalSyncPoller');
+    operationalSyncPoller.enqueue(businessId, 'QUOTATION', quotation.id, 'CREATE').catch(console.error);
+
+    return quotation;
   }
 
   async getQuotation(businessId: string, id: string) {
@@ -123,10 +119,165 @@ export class QuotationService {
       }
     }
 
-    return prisma.quotation.update({
+    const updated = await prisma.quotation.update({
       where: { id, businessId },
       data: { status }
     });
+
+    const { operationalSyncPoller } = require('../queue/operationalSyncPoller');
+    operationalSyncPoller.enqueue(businessId, 'QUOTATION', updated.id, 'STATUS_UPDATE').catch(console.error);
+
+    return updated;
+  }
+
+  async sendQuotation(businessId: string, id: string, requestedById?: string) {
+    const quotation = await prisma.quotation.findUnique({
+      where: { id, businessId },
+      include: { customer: true, business: true }
+    });
+    if (!quotation) throw new Error('Quotation not found');
+
+    if (quotation.status === 'SENT') {
+      return quotation; // Idempotent
+    }
+
+    // 1. Governance approval check
+    if (requestedById) {
+      const discountPercentage = quotation.totalAmount ? (quotation.discountAmount / (quotation.subtotal || 1)) * 100 : 0;
+      const context = {
+        quotation: {
+          grandTotal: quotation.totalAmount,
+          discountPercentage,
+          currency: quotation.currency
+        }
+      };
+
+      const gov = await GovernanceService.evaluateAction(businessId, 'QUOTATION_SEND', context);
+      if (gov.requiresApproval) {
+        const existingApprovals = await prisma.approvalRequest.findMany({
+          where: { businessId, resourceId: id, actionType: 'QUOTATION_SEND', status: 'APPROVED' }
+        });
+        if (existingApprovals.length === 0) {
+          throw new Error('APPROVAL_REQUIRED');
+        }
+      }
+    }
+
+    // 2. Ensure Document is generated
+    let generatedDocId = quotation.generatedDocumentId;
+    if (!generatedDocId) {
+      const { documentGenerationService } = require('../documents/DocumentGenerationService');
+      const doc = await documentGenerationService.generateDocument(businessId, 'QUOTATION', quotation.id);
+      generatedDocId = doc.id || doc;
+    }
+
+    const doc = generatedDocId
+      ? await prisma.knowledgeDocument.findUnique({
+          where: { id: generatedDocId }
+        })
+      : null;
+
+    const fs = require('fs');
+    const path = require('path');
+    let pdfBase64 = '';
+    if (doc?.storagePath) {
+      let pdfPath = doc.storagePath;
+      if (pdfPath.startsWith('business/')) {
+        pdfPath = path.join(process.cwd(), 'uploads', pdfPath.substring(9));
+      }
+      if (fs.existsSync(pdfPath)) {
+        pdfBase64 = fs.readFileSync(pdfPath).toString('base64');
+      }
+    }
+
+    // 3. Gmail Dispatch
+    const integration = await prisma.integration.findFirst({
+      where: { businessId, provider: 'GMAIL', status: 'CONNECTED' }
+    });
+    if (!integration) {
+      let deliveryMeta = { attemptCount: 1, deliveryStatus: 'FAILED', lastError: 'Gmail integration not connected' };
+      await prisma.quotation.update({
+        where: { id: quotation.id },
+        data: { notes: JSON.stringify(deliveryMeta) }
+      });
+      throw new Error('GMAIL_SEND_FAILED: Gmail integration not connected');
+    }
+
+    const { decrypt, encrypt } = require('../encryption');
+    const creds = await prisma.integrationCredential.findUnique({ where: { integrationId: integration.id } });
+    if (!creds || !creds.accessTokenEncrypted) throw new Error('Gmail credentials not found');
+
+    let accessToken = decrypt(creds.accessTokenEncrypted);
+    const { gmailActions } = require('../../connectors/actions/gmail');
+    const sendEmailAction = gmailActions.find((a: any) => a.id === 'send_email');
+    if (!sendEmailAction) throw new Error('send_email action not found');
+
+    const customerName = (quotation.customerSnapshot as any)?.name || quotation.customer?.name || 'Customer';
+    const customerEmail = (quotation.customerSnapshot as any)?.email || quotation.customer?.email;
+    const businessName = quotation.business?.name || 'Our Team';
+
+    const subject = `Quotation ${quotation.quotationNumber} – ${businessName}`;
+    const body = `
+      <p>Dear ${customerName},</p>
+      <p>Thank you for your enquiry. Please find attached our quotation <strong>${quotation.quotationNumber}</strong>.</p>
+      <p>Total Amount: ${quotation.currency} ${quotation.totalAmount.toLocaleString()}</p>
+      <p>Please review the attached PDF document and let us know if you wish to proceed.</p>
+      <p>Best regards,<br/>${businessName}</p>
+    `;
+
+    try {
+      const sendResult = await sendEmailAction.execute(
+        { businessId, workflowId: '', executionId: '', accessToken },
+        {
+          to: customerEmail,
+          subject,
+          body,
+          inReplyTo: quotation.gmailMessageId,
+          threadId: quotation.gmailThreadId,
+          attachments: pdfBase64 ? [
+            {
+              filename: `${quotation.quotationNumber}.pdf`,
+              mimeType: 'application/pdf',
+              content: pdfBase64
+            }
+          ] : []
+        }
+      );
+
+      const deliveryMeta = {
+        attemptCount: 1,
+        deliveryStatus: 'DELIVERED',
+        sentAt: new Date().toISOString(),
+        lastError: null
+      };
+
+      const updated = await prisma.quotation.update({
+        where: { id: quotation.id },
+        data: {
+          status: 'SENT',
+          gmailMessageId: sendResult?.id || quotation.gmailMessageId,
+          notes: JSON.stringify(deliveryMeta)
+        }
+      });
+
+      const { operationalSyncPoller } = require('../queue/operationalSyncPoller');
+      operationalSyncPoller.enqueue(businessId, 'QUOTATION', updated.id, 'STATUS_UPDATE').catch(console.error);
+
+      return updated;
+    } catch (err: any) {
+      const deliveryMeta = {
+        attemptCount: 1,
+        deliveryStatus: 'FAILED',
+        lastError: err.message
+      };
+
+      await prisma.quotation.update({
+        where: { id: quotation.id },
+        data: { notes: JSON.stringify(deliveryMeta) }
+      });
+
+      throw new Error(`GMAIL_SEND_FAILED: ${err.message}`);
+    }
   }
 }
 

@@ -90,7 +90,7 @@ async function runTests() {
     const invoice = await prisma.invoice.findFirst({ where: { orderId: order!.id } });
     assert(!!invoice, 'Invoice created from order');
     assert(invoice!.totalAmount === 85120, 'Invoice total matches order snapshot');
-    assert(invoice!.status === 'GENERATED' || invoice!.status === 'SENT', `Invoice progressed past DRAFT (Actual: ${invoice?.status})`);
+    assert(invoice!.status === 'ISSUED' || invoice!.status === 'SENT', `Invoice progressed past DRAFT (Actual: ${invoice?.status})`);
 
     // 2. Missing Billing Address Test
     console.log('\\n--- Test Suite 2: Missing Customer Data ---');

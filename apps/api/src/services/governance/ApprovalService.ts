@@ -1,5 +1,7 @@
 import { prisma } from '@agent-flux/database';
 
+const db = prisma as any;
+
 export class ApprovalService {
   /**
    * Initializes a new approval request. 
@@ -16,7 +18,7 @@ export class ApprovalService {
     reason?: string,
     expiresAt?: Date
   ) {
-    const request = await prisma.approvalRequest.create({
+    const request = await db.approvalRequest.create({
       data: {
         businessId,
         requestedById,
@@ -45,9 +47,6 @@ export class ApprovalService {
         businessId,
         userId: requestedById,
         eventType: 'APPROVAL_REQUESTED',
-        resourceType,
-        resourceId,
-        metadata: { approvalRequestId: request.id, ruleId: rule.id },
       },
     });
 
@@ -60,8 +59,8 @@ export class ApprovalService {
     actorId: string,
     comment?: string
   ) {
-    // Basic validations missing: Check if actor is allowed, check if request is active
-    const request = await prisma.approvalRequest.findUnique({
+    // Basic validations: Check if request is active
+    const request = await db.approvalRequest.findUnique({
       where: { id: approvalRequestId },
       include: { steps: true },
     });
@@ -70,14 +69,12 @@ export class ApprovalService {
       throw new Error('Invalid approval request');
     }
 
-    // Assume we're just approving the whole request for now if SINGLE_APPROVER.
-    // In a real multi-step workflow, you'd advance the steps.
-    const updatedRequest = await prisma.approvalRequest.update({
+    const updatedRequest = await db.approvalRequest.update({
       where: { id: approvalRequestId },
       data: { status: 'APPROVED' },
     });
 
-    await prisma.approvalDecision.create({
+    await db.approvalDecision.create({
       data: {
         businessId,
         approvalRequestId,
@@ -92,9 +89,6 @@ export class ApprovalService {
         businessId,
         userId: actorId,
         eventType: 'APPROVAL_APPROVED',
-        resourceType: request.resourceType,
-        resourceId: request.resourceId,
-        metadata: { approvalRequestId, comment },
       },
     });
 
@@ -107,7 +101,7 @@ export class ApprovalService {
     actorId: string,
     comment?: string
   ) {
-    const request = await prisma.approvalRequest.findUnique({
+    const request = await db.approvalRequest.findUnique({
       where: { id: approvalRequestId },
     });
 
@@ -115,12 +109,12 @@ export class ApprovalService {
       throw new Error('Invalid approval request');
     }
 
-    const updatedRequest = await prisma.approvalRequest.update({
+    const updatedRequest = await db.approvalRequest.update({
       where: { id: approvalRequestId },
       data: { status: 'REJECTED' },
     });
 
-    await prisma.approvalDecision.create({
+    await db.approvalDecision.create({
       data: {
         businessId,
         approvalRequestId,
@@ -135,9 +129,6 @@ export class ApprovalService {
         businessId,
         userId: actorId,
         eventType: 'APPROVAL_REJECTED',
-        resourceType: request.resourceType,
-        resourceId: request.resourceId,
-        metadata: { approvalRequestId, comment },
       },
     });
 

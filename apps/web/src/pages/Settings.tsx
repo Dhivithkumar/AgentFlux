@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
-import { useOutletContext } from 'react-router-dom';
+import { useOutletContext, Link } from 'react-router-dom';
 import { apiCall } from '../lib/api';
-import { Settings as SettingsIcon, Building, Users, Shield, Zap, Bell, Workflow, Database, Activity, Save, Loader2 } from 'lucide-react';
+import { Settings as SettingsIcon, Building, Users, Shield, Zap, Bell, Workflow, Database, Activity, Save, Loader2, ExternalLink } from 'lucide-react';
 import WorkflowConfigSettings from '../components/WorkflowConfigSettings';
 import OperationsSettings from '../components/OperationsSettings';
 import BusinessProfileSettings from '../components/BusinessProfileSettings';
+import { useToast } from '../components/ui/Toast';
 
 export default function Settings() {
   const { business } = useOutletContext<{ business: any }>();
@@ -45,6 +46,8 @@ export default function Settings() {
     }
   };
 
+  const { addToast } = useToast();
+
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -52,10 +55,18 @@ export default function Settings() {
         method: 'PATCH',
         body: JSON.stringify({ business: formData })
       });
-      alert('Settings saved successfully');
-    } catch (e) {
+      addToast({
+        type: 'success',
+        title: 'Settings Saved',
+        message: 'General configuration updated successfully.'
+      });
+    } catch (e: any) {
       console.error(e);
-      alert('Failed to save settings');
+      addToast({
+        type: 'error',
+        title: 'Save Failed',
+        message: e.message || 'Failed to save settings.'
+      });
     } finally {
       setSaving(false);
     }
@@ -64,6 +75,7 @@ export default function Settings() {
   const TABS = [
     { id: 'GENERAL', label: 'General', icon: <SettingsIcon size={18} /> },
     { id: 'BUSINESS', label: 'Business Profile', icon: <Building size={18} /> },
+    { id: 'REQUIREMENTS', label: 'Requirements & Automation', icon: <Workflow size={18} /> },
     { id: 'TEAM', label: 'Team', icon: <Users size={18} /> },
     { id: 'SECURITY', label: 'Security', icon: <Shield size={18} /> },
     { id: 'AI', label: 'AI Providers', icon: <Zap size={18} /> },
@@ -169,6 +181,24 @@ export default function Settings() {
                     {saving ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
                     Save Changes
                   </button>
+                </div>
+              </div>
+            ) : activeTab === 'REQUIREMENTS' ? (
+              <div className="bg-white p-8 rounded-xl border border-slate-200 shadow-sm space-y-6 animate-in fade-in">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <h2 className="text-xl font-bold text-slate-900">Automation Requirements & Terminology</h2>
+                    <p className="text-slate-500 mt-1">Configure your industry terminology, financial rules, document prefixes, and custom modules.</p>
+                  </div>
+                  <Link
+                    to="/onboarding"
+                    className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg text-sm font-semibold inline-flex items-center gap-1.5 shadow-sm"
+                  >
+                    Open Requirements Wizard <ExternalLink size={14} />
+                  </Link>
+                </div>
+                <div className="p-4 bg-slate-50 rounded-lg border border-slate-200 text-sm text-slate-600">
+                  <p>Your business automation rules are configured to adapt to your specific workflow. Click the button above to launch the interactive multi-step configuration wizard where you can update products, custom terminology, operating currencies, and approval thresholds.</p>
                 </div>
               </div>
             ) : activeTab === 'WORKFLOWS' ? (

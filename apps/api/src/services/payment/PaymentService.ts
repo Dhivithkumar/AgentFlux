@@ -4,6 +4,7 @@ import { RazorpayProvider } from './RazorpayProvider';
 import { paymentSummaryService } from './PaymentSummaryService';
 import { GovernanceService } from '../governance/GovernanceService';
 import { ApprovalService } from '../governance/ApprovalService';
+import { BusinessProfileService } from '../business/profileService';
 import { EventBus } from '../eventBus';
 import crypto from 'crypto';
 
@@ -230,10 +231,7 @@ export class PaymentService {
       data: {
         businessId,
         userId: requestedById,
-        eventType: 'PAYMENT_REFUNDED',
-        resourceType: 'Payment',
-        resourceId: paymentId,
-        metadata: { amount }
+        eventType: 'PAYMENT_REFUNDED'
       }
     });
 
@@ -247,20 +245,22 @@ export class PaymentService {
     
     if (!business) throw new Error('Business not found');
 
+    const profile = BusinessProfileService.flattenProfile(business, false);
+
     // Check configuration readiness for payment instructions
-    if (!business.bankAccountNumber || !business.bankIfsc) {
+    if (!profile.bankAccountNumber || !profile.bankIfsc) {
       return { status: 'PAYMENT_CONFIGURATION_REQUIRED' };
     }
 
     const paymentDetails = `
-Bank Name: ${business.bankName || ''}
-Account Name: ${business.bankAccountName || ''}
-Account Number: ${business.bankAccountNumber}
-IFSC Code: ${business.bankIfsc}
-Branch: ${business.bankBranch || ''}
-UPI ID: ${business.upiId || ''}
+Bank Name: ${profile.bankName || ''}
+Account Name: ${profile.bankAccountName || ''}
+Account Number: ${profile.bankAccountNumber}
+IFSC Code: ${profile.bankIfsc}
+Branch: ${profile.bankBranch || ''}
+UPI ID: ${profile.upiId || ''}
 
-${business.paymentInstructions ? `Instructions: ${business.paymentInstructions}` : ''}
+${profile.paymentInstructions ? `Instructions: ${profile.paymentInstructions}` : ''}
     `.trim();
 
     // In a real scenario we'd use the EmailService to send this via Gmail API.

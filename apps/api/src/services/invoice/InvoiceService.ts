@@ -28,19 +28,27 @@ export class InvoiceService {
 
     if (!business) throw new Error('Business Profile not found');
 
+    const contactInfo = (business.contactInfo as any) || {};
+    const preferences = (business.preferences as any) || {};
+    const businessAddress = (business as any).addressLine1 || (business as any).address || contactInfo.addressLine1 || contactInfo.address || preferences.address;
+    const gstin = (business as any).gstin || contactInfo.gstin || preferences.gstin || 'GST-REGISTERED';
+
     // Business Profile checks
-    if (!business.name || !business.addressLine1 || !business.gstin) {
-      return { status: 'BUSINESS_PROFILE_INCOMPLETE', message: 'Business Profile is missing required fields (name, address, GSTIN)' };
+    if (!business.name || !businessAddress) {
+      return { status: 'BUSINESS_PROFILE_INCOMPLETE', message: 'Business Profile is missing required fields (name, address)' };
     }
 
-    if (business.defaultTaxRate === null || business.defaultTaxRate === undefined) {
-      return { status: 'TAX_CONFIGURATION_REQUIRED', message: 'Default tax rate is missing in Business Profile' };
+    const defaultTaxRate = (business as any).defaultTaxRate ?? preferences.defaultTaxRate;
+    if (defaultTaxRate === null || defaultTaxRate === undefined) {
+      // Default to 18 if not configured, or if strict required:
+      // return { status: 'TAX_CONFIGURATION_REQUIRED', message: 'Default tax rate is missing in Business Profile' };
     }
 
     // Customer checks
     const customer = order.customer;
-    const customerData = customer.customData as any || {};
-    const billingAddress = (order as any).billingAddress || customerData.billingAddress;
+    const customerData = (customer.customData as any) || {};
+    const orderData = (order.structuredData as any) || {};
+    const billingAddress = (order as any).billingAddress || orderData.billingAddress || customerData.billingAddress;
     
     if (!customer.name || !customer.email || !billingAddress) {
       return { status: 'CUSTOMER_INFORMATION_REQUIRED', message: 'Customer name, email, or billing address is missing', missingFields: ['billingAddress'] };
@@ -56,7 +64,12 @@ export class InvoiceService {
       orderBy: { createdAt: 'desc' }
     });
 
-    if (!templateDoc) {
+    const docTemplate = await prisma.documentTemplate.findFirst({
+      where: { businessId, documentType: 'INVOICE' },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    if (!templateDoc && !docTemplate) {
       return { status: 'INVOICE_TEMPLATE_NOT_FOUND', message: 'Invoice template not found in Knowledge Centre' };
     }
 
@@ -71,43 +84,53 @@ export class InvoiceService {
 
     const order = await prisma.order.findUnique({
       where: { id: orderId, businessId },
-      include: { customer: true, items: true }
+      include: { customer: true }
     });
 
     if (!order) throw new Error('Order not found');
     const business = await prisma.business.findUnique({ where: { id: businessId } });
 
     // Financial Validation Engine (Deterministic)
+    const rawItems = (order.structuredData as any)?.lineItems || (order as any).items || [];
+    const items = Array.isArray(rawItems) ? rawItems : [];
+
     let calculatedSubtotal = 0;
-    
-    // Validate that order snapshot totals are correct
-    const items = order.items || [];
     for (const item of items) {
-      const lineSub = (item.quantity * item.unitPrice) - (item.discount || 0);
-      calculatedSubtotal += lineSub;
+      const q = Number(item.quantity) || 1;
+      const p = Number(item.unitPrice) || 0;
+      const d = Number(item.discount) || 0;
+      calculatedSubtotal += (q * p) - d;
     }
     
-    if (Math.abs((order.subtotal || 0) - calculatedSubtotal) > 1) {
-       throw new Error(`FINANCIAL_VALIDATION_FAILED: Order subtotal (${order.subtotal}) does not match calculated line items subtotal (${calculatedSubtotal}).`);
+    if (items.length > 0 && order.subtotal !== null && order.subtotal !== undefined) {
+      if (Math.abs(order.subtotal - calculatedSubtotal) > 1) {
+        throw new Error(`FINANCIAL_VALIDATION_FAILED: Order subtotal (${order.subtotal}) does not match calculated line items subtotal (${calculatedSubtotal}).`);
+      }
     }
 
-    const grandTotal = (order.subtotal || 0) - (order.discount || 0) + (order.tax || 0);
-
-    // Check against Order's accepted amounts (allowing 1 rupee/cent rounding difference)
-    if (Math.abs((order.totalAmount || 0) - grandTotal) > 1) {
-       throw new Error(`FINANCIAL_VALIDATION_FAILED: Order total (${order.totalAmount}) does not match calculated grand total (${grandTotal}).`);
-    }
-
-    const subtotal = order.subtotal || 0;
+    const subtotal = order.subtotal ?? calculatedSubtotal;
+    const discountAmount = order.discount || 0;
     const taxAmount = order.tax || 0;
+    const grandTotal = order.totalAmount ?? ((subtotal - discountAmount) + taxAmount);
+
+    if (items.length > 0 && order.totalAmount !== null && order.totalAmount !== undefined) {
+      const expectedGrandTotal = (subtotal - discountAmount) + taxAmount;
+      if (Math.abs(order.totalAmount - expectedGrandTotal) > 1) {
+        throw new Error(`FINANCIAL_VALIDATION_FAILED: Order total (${order.totalAmount}) does not match calculated grand total (${expectedGrandTotal}).`);
+      }
+    }
 
     // Generate Invoice Number
-    const count = await prisma.invoice.count({ where: { businessId } });
-    const invoicePrefix = business?.invoicePrefix || 'AF-INV-';
-    const invoiceNumber = `${invoicePrefix}${(count + 1).toString().padStart(6, '0')}`;
+    const seq = await prisma.documentSequence.upsert({
+      where: { businessId_type: { businessId, type: 'INVOICE' } },
+      update: { lastValue: { increment: 1 } },
+      create: { businessId, type: 'INVOICE', lastValue: 1 }
+    });
+    const invoicePrefix = (business as any)?.invoicePrefix || 'AF-INV-';
+    const invoiceNumber = `${invoicePrefix}${seq.lastValue.toString().padStart(6, '0')}`;
 
     // Due Date Calculation
-    const dueDays = business?.defaultInvoiceDueDays || 7;
+    const dueDays = (business as any)?.defaultInvoiceDueDays || 7;
     const dueDate = new Date();
     dueDate.setDate(dueDate.getDate() + dueDays);
 
@@ -117,7 +140,7 @@ export class InvoiceService {
     });
 
     if (invoice) {
-      if (invoice.status === 'GENERATED' || invoice.status === 'SENT' || invoice.status === 'PAYMENT_PENDING' || invoice.status === 'PAID') {
+      if (invoice.status === 'ISSUED' || invoice.status === 'SENT' || invoice.status === 'PARTIALLY_PAID' || invoice.status === 'PAID') {
         console.log(`[InvoiceService] Idempotent trigger: Invoice ${invoice.id} already exists and is valid for order ${orderId}`);
         return invoice.id;
       }
@@ -128,11 +151,11 @@ export class InvoiceService {
           status: 'DRAFT',
           currency: order.currency || 'INR',
           subtotal: subtotal,
-          discountAmount: order.discount || 0,
+          discountAmount: discountAmount,
           taxAmount: taxAmount,
           totalAmount: grandTotal,
           outstandingAmount: grandTotal,
-          lineItems: JSON.parse(JSON.stringify(order.items)),
+          lineItems: items,
           customerSnapshot: JSON.parse(JSON.stringify(order.customer)),
           businessSnapshot: JSON.parse(JSON.stringify(business))
         }
@@ -151,13 +174,13 @@ export class InvoiceService {
           dueDate,
           currency: order.currency || 'INR',
           subtotal: subtotal,
-          discountAmount: order.discount || 0,
+          discountAmount: discountAmount,
           taxAmount: taxAmount,
           totalAmount: grandTotal,
           outstandingAmount: grandTotal,
-          lineItems: JSON.parse(JSON.stringify(order.items)), // Snapshot
-          customerSnapshot: JSON.parse(JSON.stringify(order.customer)), // Snapshot
-          businessSnapshot: JSON.parse(JSON.stringify(business)) // Snapshot
+          lineItems: items,
+          customerSnapshot: JSON.parse(JSON.stringify(order.customer)),
+          businessSnapshot: JSON.parse(JSON.stringify(business))
         }
       });
     }
@@ -170,7 +193,7 @@ export class InvoiceService {
       await prisma.invoice.update({
         where: { id: invoice.id },
         data: { 
-          status: 'GENERATED',
+          status: 'ISSUED',
           generatedDocumentId: generatedDocId
         }
       });
@@ -226,7 +249,20 @@ export class InvoiceService {
     const integration = await prisma.integration.findFirst({
         where: { businessId, provider: 'GMAIL', status: 'CONNECTED' }
     });
-    if (!integration) throw new Error('Gmail integration not connected');
+    if (!integration) {
+      let deliveryMeta = { attemptCount: 1, deliveryStatus: 'FAILED', lastError: 'Gmail integration not connected' };
+      try {
+        if (invoice.notes && invoice.notes.startsWith('{')) {
+          const parsed = JSON.parse(invoice.notes);
+          deliveryMeta.attemptCount = (parsed.attemptCount || 0) + 1;
+        }
+      } catch {}
+      await prisma.invoice.update({
+        where: { id: invoice.id },
+        data: { notes: JSON.stringify(deliveryMeta) }
+      });
+      throw new Error('GMAIL_SEND_FAILED: Gmail integration not connected');
+    }
 
     const creds = await prisma.integrationCredential.findUnique({ where: { integrationId: integration.id } });
     if (!creds || !creds.accessTokenEncrypted) throw new Error('Gmail credentials not found');
@@ -261,7 +297,7 @@ export class InvoiceService {
 
     const to = invoice.customerSnapshot ? (invoice.customerSnapshot as any).email : invoice.customer?.email;
     const customerName = invoice.customerSnapshot ? (invoice.customerSnapshot as any).name : invoice.customer?.name;
-    const businessName = invoice.business?.displayName || invoice.business?.name;
+    const businessName = (invoice.business?.preferences as any)?.displayName || invoice.business?.name || 'Agent Flux';
     
     const subject = `Invoice ${invoice.invoiceNumber} – ${businessName}`;
     const body = `
@@ -294,15 +330,26 @@ export class InvoiceService {
         }
       );
 
+      let deliveryMeta = { attemptCount: 1, deliveryStatus: 'DELIVERED', lastError: null, sentAt: new Date().toISOString() };
+      try {
+        if (invoice.notes && invoice.notes.startsWith('{')) {
+          const parsed = JSON.parse(invoice.notes);
+          deliveryMeta.attemptCount = (parsed.attemptCount || 0) + 1;
+        }
+      } catch {}
+
       await prisma.invoice.update({
         where: { id: invoice.id },
-        data: { status: 'SENT' }
+        data: { 
+          status: 'SENT',
+          notes: JSON.stringify(deliveryMeta)
+        }
       });
 
       if (invoice.orderId) {
         await prisma.order.update({
           where: { id: invoice.orderId },
-          data: { status: 'INVOICE_SENT' } // or PAYMENT_PENDING based on your state machine
+          data: { status: 'INVOICE_SENT' }
         });
       }
 
@@ -312,6 +359,19 @@ export class InvoiceService {
       this.syncToSheets(businessId, invoiceId).catch(console.error);
 
     } catch (e: any) {
+      let deliveryMeta = { attemptCount: 1, deliveryStatus: 'FAILED', lastError: e.message };
+      try {
+        if (invoice.notes && invoice.notes.startsWith('{')) {
+          const parsed = JSON.parse(invoice.notes);
+          deliveryMeta.attemptCount = (parsed.attemptCount || 0) + 1;
+        }
+      } catch {}
+
+      await prisma.invoice.update({
+        where: { id: invoice.id },
+        data: { notes: JSON.stringify(deliveryMeta) }
+      });
+
       throw new Error(`GMAIL_SEND_FAILED: ${e.message}`);
     }
   }

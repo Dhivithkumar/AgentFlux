@@ -24,8 +24,9 @@ model User {
   KnowledgeDocument  KnowledgeDocument[]
   assignedEnquiries  Enquiry[]
   assignedOrders     Order[]
-  orderStatusChanges OrderStatusHistory[]
-  documentTemplates  DocumentTemplate[]
+  orderStatusChanges   OrderStatusHistory[]
+  documentTemplates    DocumentTemplate[]
+  postedJournalEntries JournalEntry[]       @relation("JournalPostedBy")
 }
 
 model Business {
@@ -35,7 +36,7 @@ model Business {
   businessType           String?
   country                String?
   timezone               String?
-  currency               String?
+  currency               String?                   @default("INR")
   website                String?
   description            String?
   contactInfo            Json?
@@ -62,6 +63,13 @@ model Business {
   invoices               Invoice[]
   documentTemplates      DocumentTemplate[]
   Payment                Payment[]
+  configuration          BusinessConfiguration?
+  recordTypes            BusinessRecordType[]
+  records                BusinessRecord[]
+  accounts               Account[]
+  journalEntries         JournalEntry[]
+  accountingPeriods      AccountingPeriod[]
+  bankFeedAccounts       BankFeedAccount[]
 }
 
 model WorkflowFieldDefinition {
@@ -676,6 +684,7 @@ model Order {
   businessId        String
   customerId        String
   enquiryId         String? @unique
+  quotationId       String?
   workflowId        String?
   workflowVersionId String?
   orderNumber       String
@@ -794,7 +803,7 @@ model Quotation {
   quotationDate DateTime  @default(now())
   validUntil    DateTime?
 
-  currency String @default("USD")
+  currency String @default("INR")
 
   subtotal       Float @default(0)
   discountAmount Float @default(0)
@@ -812,6 +821,9 @@ model Quotation {
   templateVersion Int?
 
   generatedDocumentId String?
+  gmailThreadId     String?
+  gmailMessageId    String?
+  quotationRevision Int? @default(1)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -850,7 +862,7 @@ model Invoice {
   invoiceDate DateTime  @default(now())
   dueDate     DateTime?
 
-  currency String @default("USD")
+  currency String @default("INR")
 
   subtotal          Float @default(0)
   discountAmount    Float @default(0)
@@ -914,7 +926,7 @@ model Payment {
   paymentReference  String?
 
   amount   Float
-  currency String        @default("USD")
+  currency String        @default("INR")
   status   PaymentStatus @default(CREATED)
   method   String?
 
@@ -949,3 +961,362 @@ model PaymentWebhookEvent {
   @@unique([provider, providerEventId])
   @@index([provider])
 }
+
+
+model DocumentSequence {
+  id         String   @id @default(uuid())
+  businessId String
+  type       String
+  lastValue  Int      @default(0)
+  @@unique([businessId, type])
+}
+
+model ApprovalRequest {
+  id         String   @id @default(uuid())
+  businessId String
+  resourceId String
+  actionType String
+  status     String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  @@index([businessId])
+}
+
+model BusinessConfiguration {
+  id                    String   @id @default(uuid())
+  businessId            String   @unique
+  enabledModules        String[] @default([])
+  locations             Json?
+  productsAndServices   Json?
+  customTerminology     Json?
+  financialConfig       Json?
+  numberingPreferences  Json?
+  departmentsAndRoles   Json?
+  desiredOutcomes       Json?
+  communicationChannels Json?
+  documentPreferences   Json?
+  approvalRules         Json?
+  dashboardPreferences  Json?
+  onboardingStatus      String   @default("DRAFT") // DRAFT, REVIEW_REQUIRED, COMPLETED
+  onboardingStep        Int      @default(1)
+  reviewedAndConfirmedAt DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  @@index([businessId])
+}
+
+model BusinessRecordType {
+  id          String   @id @default(uuid())
+  businessId  String
+  slug        String
+  name        String
+  description String?
+  icon        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  business   Business              @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  fields     BusinessRecordField[]
+  records    BusinessRecord[]
+
+  @@unique([businessId, slug])
+  @@index([businessId])
+}
+
+model BusinessRecordField {
+  id           String   @id @default(uuid())
+  recordTypeId String
+  fieldKey     String
+  label        String
+  fieldType    String   // TEXT, NUMBER, DATE, SELECT, BOOLEAN, CURRENCY, JSON
+  required     Boolean  @default(false)
+  options      Json?
+  validation   Json?
+  displayOrder Int      @default(0)
+
+  recordType BusinessRecordType @relation(fields: [recordTypeId], references: [id], onDelete: Cascade)
+  @@unique([recordTypeId, fieldKey])
+  @@index([recordTypeId])
+}
+
+model BusinessRecord {
+  id           String   @id @default(uuid())
+  businessId   String
+  recordTypeId String
+  recordNumber String
+  title        String?
+  status       String   @default("OPEN")
+  data         Json
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  business   Business           @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  recordType BusinessRecordType @relation(fields: [recordTypeId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, recordTypeId, recordNumber])
+  @@index([businessId, recordTypeId])
+}
+
+// ===========================================
+// FINANCE CENTRE — DOUBLE-ENTRY GENERAL LEDGER
+// ===========================================
+
+enum AccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+}
+
+enum NormalBalance {
+  DEBIT
+  CREDIT
+}
+
+enum AccountClassification {
+  CASH_AND_BANK
+  ACCOUNTS_RECEIVABLE
+  INVENTORY
+  OTHER_CURRENT_ASSET
+  FIXED_ASSET
+  ACCOUNTS_PAYABLE
+  TAX_PAYABLE
+  OTHER_CURRENT_LIABILITY
+  LONG_TERM_LIABILITY
+  OWNERS_EQUITY
+  RETAINED_EARNINGS
+  OPERATING_REVENUE
+  OTHER_INCOME
+  COST_OF_GOODS_SOLD
+  OPERATING_EXPENSE
+  TAX_EXPENSE
+}
+
+model Account {
+  id             String                @id @default(uuid())
+  businessId     String
+  code           String
+  name           String
+  type           AccountType
+  classification AccountClassification
+  normalBalance  NormalBalance
+  currency       String                @default("INR")
+  description    String?
+  isActive       Boolean               @default(true)
+  isSystem       Boolean               @default(false)
+  
+  parentAccountId String?
+  parentAccount   Account?             @relation("AccountHierarchy", fields: [parentAccountId], references: [id], onDelete: Restrict)
+  childAccounts   Account[]            @relation("AccountHierarchy")
+
+  journalLines    JournalLine[]
+  balances        AccountBalance[]
+  bankFeedAccount BankFeedAccount?
+
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  business        Business             @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, code])
+  @@index([businessId, type])
+  @@index([businessId, classification])
+}
+
+enum JournalEntryStatus {
+  DRAFT
+  POSTED
+  VOIDED
+}
+
+enum SourceDocumentType {
+  CUSTOMER_INVOICE
+  CUSTOMER_PAYMENT
+  VENDOR_BILL
+  VENDOR_PAYMENT
+  BANK_TRANSACTION
+  MANUAL_JOURNAL
+  OPENING_BALANCE
+  PERIOD_CLOSING
+}
+
+model JournalEntry {
+  id                 String             @id @default(uuid())
+  businessId         String
+  entryNumber        String
+  postingDate        DateTime
+  accountingPeriodId String
+  status             JournalEntryStatus @default(DRAFT)
+  
+  memo               String
+  sourceType         SourceDocumentType
+  sourceId           String?
+  idempotencyKey     String?
+  
+  totalDebit         Decimal            @db.Decimal(18, 4)
+  totalCredit        Decimal            @db.Decimal(18, 4)
+
+  reversalOfEntryId  String?            @unique
+  reversalEntry      JournalEntry?      @relation("EntryReversal", fields: [reversalOfEntryId], references: [id])
+  reversedByEntry    JournalEntry?      @relation("EntryReversal")
+
+  lines              JournalLine[]
+  auditLogs          FinanceAuditLog[]
+
+  postedAt           DateTime?
+  postedById         String?
+
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  business           Business           @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  period             AccountingPeriod   @relation(fields: [accountingPeriodId], references: [id], onDelete: Restrict)
+  postedBy           User?              @relation("JournalPostedBy", fields: [postedById], references: [id], onDelete: SetNull)
+
+  @@unique([businessId, entryNumber])
+  @@unique([businessId, sourceType, sourceId])
+  @@unique([businessId, idempotencyKey])
+  @@index([businessId, postingDate])
+  @@index([businessId, status])
+}
+
+model JournalLine {
+  id             String        @id @default(uuid())
+  journalEntryId String
+  accountId      String
+  lineNumber     Int
+  
+  description    String?
+  debit          Decimal       @default(0) @db.Decimal(18, 4)
+  credit         Decimal       @default(0) @db.Decimal(18, 4)
+  
+  currency       String        @default("INR")
+  exchangeRate   Decimal       @default(1.0) @db.Decimal(18, 6)
+  foreignDebit   Decimal?      @db.Decimal(18, 4)
+  foreignCredit  Decimal?      @db.Decimal(18, 4)
+
+  reconciledLine BankTransactionMatch?
+
+  journalEntry   JournalEntry  @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  account        Account       @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  @@unique([journalEntryId, lineNumber])
+  @@index([accountId])
+}
+
+enum PeriodStatus {
+  OPEN
+  LOCKED
+  CLOSED
+}
+
+model AccountingPeriod {
+  id          String         @id @default(uuid())
+  businessId  String
+  name        String
+  startDate   DateTime
+  endDate     DateTime
+  status      PeriodStatus   @default(OPEN)
+  
+  closedAt    DateTime?
+  closedById  String?
+
+  business    Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  entries     JournalEntry[]
+  balances    AccountBalance[]
+
+  @@unique([businessId, name])
+  @@index([businessId, status])
+  @@index([businessId, startDate, endDate])
+}
+
+model AccountBalance {
+  id                 String           @id @default(uuid())
+  accountId          String
+  accountingPeriodId String
+  
+  openingDebit       Decimal          @default(0) @db.Decimal(18, 4)
+  openingCredit      Decimal          @default(0) @db.Decimal(18, 4)
+  netDebit           Decimal          @default(0) @db.Decimal(18, 4)
+  netCredit          Decimal          @default(0) @db.Decimal(18, 4)
+  closingDebit       Decimal          @default(0) @db.Decimal(18, 4)
+  closingCredit      Decimal          @default(0) @db.Decimal(18, 4)
+
+  account            Account          @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  period             AccountingPeriod @relation(fields: [accountingPeriodId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, accountingPeriodId])
+}
+
+model BankFeedAccount {
+  id                String            @id @default(uuid())
+  businessId        String
+  accountId         String            @unique
+  institutionName   String
+  accountNumberMask String
+  currency          String            @default("INR")
+  
+  externalAccountId String?
+  syncStatus        String            @default("ACTIVE")
+  lastSyncedAt      DateTime?
+
+  transactions      BankTransaction[]
+
+  business          Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  glAccount         Account           @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  @@index([businessId])
+}
+
+enum BankTxStatus {
+  UNMATCHED
+  MATCHED
+  EXCLUDED
+}
+
+model BankTransaction {
+  id                String            @id @default(uuid())
+  bankFeedAccountId String
+  transactionDate   DateTime
+  valueDate         DateTime?
+  amount            Decimal           @db.Decimal(18, 4)
+  currency          String            @default("INR")
+  description       String
+  referenceNumber   String?
+  rawPayload        Json?
+  status            BankTxStatus      @default(UNMATCHED)
+
+  match             BankTransactionMatch?
+
+  bankFeedAccount   BankFeedAccount   @relation(fields: [bankFeedAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([bankFeedAccountId, transactionDate, amount, description])
+  @@index([bankFeedAccountId, status])
+}
+
+model BankTransactionMatch {
+  id                String          @id @default(uuid())
+  bankTransactionId String          @unique
+  journalLineId     String          @unique
+  matchedAt         DateTime        @default(now())
+  matchedById       String?
+
+  bankTransaction   BankTransaction @relation(fields: [bankTransactionId], references: [id], onDelete: Cascade)
+  journalLine       JournalLine     @relation(fields: [journalLineId], references: [id], onDelete: Restrict)
+}
+
+model FinanceAuditLog {
+  id             String        @id @default(uuid())
+  businessId     String
+  journalEntryId String?
+  userId         String?
+  action         String
+  details        Json?
+  timestamp      DateTime      @default(now())
+
+  journalEntry   JournalEntry? @relation(fields: [journalEntryId], references: [id], onDelete: SetNull)
+  @@index([businessId])
+}

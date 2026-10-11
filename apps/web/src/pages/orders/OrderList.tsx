@@ -20,11 +20,13 @@ export default function OrderList() {
     setLoading(true);
     try {
       const res = await apiCall(`/businesses/${business.id}/orders`);
-      setOrders(res);
+      const list = Array.isArray(res) ? res : (res?.data || []);
+      setOrders(list);
     } catch (error) {
-      console.error(error);
+      console.error('Failed to load orders:', error);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (
@@ -43,7 +45,7 @@ export default function OrderList() {
             activeTab === 'ACTIVE' ? 'border-primary-600 text-primary-600' : 'border-transparent text-slate-500 hover:text-slate-700'
           }`}
         >
-          Active Orders ({activeOrders.length})
+          Active Orders {loading ? '' : `(${activeOrders.length})`}
         </button>
         <button
           onClick={() => setActiveTab('PAST')}
@@ -51,7 +53,7 @@ export default function OrderList() {
             activeTab === 'PAST' ? 'border-primary-600 text-primary-600' : 'border-transparent text-slate-500 hover:text-slate-700'
           }`}
         >
-          Past Orders ({pastOrders.length})
+          Past Orders {loading ? '' : `(${pastOrders.length})`}
         </button>
       </div>
 
