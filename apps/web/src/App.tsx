@@ -30,6 +30,7 @@ import OrderList from './pages/orders/OrderList';
 import OrderDetail from './pages/orders/OrderDetail';
 import BusinessData from './pages/enquiries/BusinessData';
 import FinanceCenter from './pages/finance/FinanceCenter';
+import VendorCenter from './pages/vendors/VendorCenter';
 
 function App() {
   return (
@@ -53,6 +54,7 @@ function App() {
             <Route path="orders" element={<OrderList />} />
             <Route path="orders/:id" element={<OrderDetail />} />
             <Route path="finance" element={<FinanceCenter />} />
+            <Route path="vendors" element={<VendorCenter />} />
             
             <Route path="workflow-packs" element={<WorkflowPacks />} />
             <Route path="workflows" element={<WorkflowCenter />} />

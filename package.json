@@ -8,7 +8,8 @@
     "dev": "pnpm --parallel -r run dev",
     "build": "pnpm --parallel -r run build",
     "db:generate": "pnpm -F database generate",
-    "db:push": "pnpm -F database push"
+    "db:push": "pnpm -F database push",
+    "db:bridge": "node scripts/pg_bridge.js"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
@@ -19,7 +20,14 @@
     ]
   },
   "devDependencies": {
-    "prisma": "5.22.0"
+    "@google/generative-ai": "^0.24.1",
+    "@types/node": "^26.6.5",
+    "dotenv": "^18.0.9",
+    "googleapis": "^188.0.0",
+    "ioredis": "^6.0.0",
+    "prisma": "5.22.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
   },
   "dependencies": {
     "@agent-flux/database": "workspace:*",

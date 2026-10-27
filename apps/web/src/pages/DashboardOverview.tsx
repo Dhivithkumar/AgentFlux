@@ -23,8 +23,13 @@ import {
   Clock,
   ArrowRight,
   ChevronRight,
-  Radio
+  Radio,
+  Plus,
+  ShieldCheck,
+  Info,
+  CreditCard
 } from 'lucide-react';
+import CreateOrderModal from '../components/orders/CreateOrderModal';
 
 interface OverviewData {
   overview: any;
@@ -36,6 +41,9 @@ interface OverviewData {
   revenue: any;
   activity: any[];
   insights: any;
+  priorityOrders?: any;
+  customerHealth?: any;
+  vendorSummary?: any;
 }
 
 export default function DashboardOverview() {
@@ -50,6 +58,8 @@ export default function DashboardOverview() {
   const [staleError, setStaleError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<Record<string, boolean>>({});
   const [liveTransport, setLiveTransport] = useState<'sse' | 'polling' | 'disconnected'>('disconnected');
+  const [isCreateOrderOpen, setIsCreateOrderOpen] = useState(false);
+  const [selectedPriorityReason, setSelectedPriorityReason] = useState<any | null>(null);
 
   // Concurrency & lifecycle refs
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -99,7 +109,10 @@ export default function DashboardOverview() {
           funnel,
           revenue,
           activity,
-          insights
+          insights,
+          priorityOrders,
+          customerHealth,
+          vendorSummary
         ] = await Promise.all([
           safeGet(`/businesses/${business.id}/analytics/overview`),
           safeGet(`/businesses/${business.id}/analytics/action-zone`),
@@ -109,7 +122,10 @@ export default function DashboardOverview() {
           safeGet(`/businesses/${business.id}/analytics/funnel`),
           safeGet(`/businesses/${business.id}/analytics/revenue`),
           safeGet(`/businesses/${business.id}/analytics/activity`),
-          safeGet(`/businesses/${business.id}/analytics/insights`)
+          safeGet(`/businesses/${business.id}/analytics/insights`),
+          safeGet(`/businesses/${business.id}/analytics/priority-orders`),
+          safeGet(`/businesses/${business.id}/analytics/customer-health`),
+          safeGet(`/businesses/${business.id}/analytics/vendor-summary`)
         ]);
 
         if (signal.aborted) return;
@@ -128,7 +144,10 @@ export default function DashboardOverview() {
           funnel: funnel || prev?.funnel || { stages: [] },
           revenue: revenue || prev?.revenue || {},
           activity: activity || prev?.activity || [],
-          insights: insights || prev?.insights || { insights: [] }
+          insights: insights || prev?.insights || { insights: [] },
+          priorityOrders: priorityOrders || prev?.priorityOrders || { orders: [], summary: {} },
+          customerHealth: customerHealth || prev?.customerHealth || { customers: [], summary: {}, riskAccounts: [] },
+          vendorSummary: vendorSummary || prev?.vendorSummary || { totalVendors: 0, statusCounts: {} }
         }));
 
         setLastRefreshedAt(new Date());
@@ -319,7 +338,7 @@ export default function DashboardOverview() {
     );
   }
 
-  const { overview, actionZone, connectors, configAlerts, jobs, funnel, revenue, activity, insights } = data;
+  const { overview, actionZone, connectors, configAlerts, jobs, funnel, revenue, activity, insights, priorityOrders, customerHealth, vendorSummary } = data;
 
   const syncJobsSummary = jobs?.summary || overview?.syncJobs || {
     queued: 0,
@@ -331,6 +350,37 @@ export default function DashboardOverview() {
 
   const sheetsStatus = connectors?.googleSheets?.status || 'NOT_CONFIGURED';
   const driveStatus = connectors?.googleDrive?.status || 'NOT_CONFIGURED';
+
+  const getScoreBadge = (score?: number | null, category?: string) => {
+    if (score === null || score === undefined || category === 'INSUFFICIENT_HISTORY') {
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+          Insufficient History
+        </span>
+      );
+    }
+    let color = 'bg-slate-100 text-slate-700 border-slate-200';
+    let label = category || 'SCORE';
+    if (score >= 80) {
+      color = 'bg-emerald-100 text-emerald-800 border-emerald-300';
+      label = 'Strong';
+    } else if (score >= 60) {
+      color = 'bg-blue-100 text-blue-800 border-blue-300';
+      label = 'Good';
+    } else if (score >= 40) {
+      color = 'bg-amber-100 text-amber-800 border-amber-300';
+      label = 'Caution';
+    } else {
+      color = 'bg-rose-100 text-rose-800 border-rose-300';
+      label = 'High Risk';
+    }
+    return (
+      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold border ${color}`}>
+        <span className="font-mono">{score}</span>
+        <span className="text-[10px] font-normal uppercase">({label})</span>
+      </span>
+    );
+  };
 
   return (
     <div className="max-w-[1600px] mx-auto space-y-6 pb-16 px-2 animate-in fade-in duration-300">
@@ -395,6 +445,15 @@ export default function DashboardOverview() {
               )}
             </p>
           </div>
+
+          <button
+            id="dashboard-create-order-btn"
+            onClick={() => setIsCreateOrderOpen(true)}
+            className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-primary-600 to-indigo-600 hover:from-primary-700 hover:to-indigo-700 text-white rounded-xl shadow-md hover:shadow-lg transition font-semibold text-sm shrink-0"
+          >
+            <Plus size={16} />
+            <span>Create Order</span>
+          </button>
 
           <button
             onClick={() => fetchData(true)}
@@ -513,6 +572,112 @@ export default function DashboardOverview() {
           </div>
         ))}
       </div>
+
+      {/* High-Priority Order Intelligence Section */}
+      <section className="bg-white/95 backdrop-blur-xl rounded-2xl border border-slate-200 shadow-sm overflow-hidden p-6">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="p-1.5 rounded-lg bg-rose-100 text-rose-700">
+                <AlertTriangle size={18} />
+              </span>
+              <h2 className="text-lg font-bold text-slate-900 tracking-tight">
+                High-Priority Order Intelligence
+              </h2>
+            </div>
+            <p className="text-xs text-slate-500 mt-1">
+              Scored via real-time financial exposure, overdue risk, and verified customer payment history.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2.5">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200">
+              <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse"></span>
+              {priorityOrders?.summary?.criticalCount || 0} Critical
+            </span>
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200">
+              {priorityOrders?.summary?.highCount || 0} High
+            </span>
+            <Link
+              to="/dashboard/orders"
+              className="text-xs font-semibold text-primary-600 hover:text-primary-700 hover:underline ml-2"
+            >
+              View All Orders &rarr;
+            </Link>
+          </div>
+        </div>
+
+        {!priorityOrders?.orders || priorityOrders.orders.length === 0 ? (
+          <div className="p-8 text-center border-2 border-dashed border-slate-200 rounded-xl bg-slate-50/50">
+            <CheckCircle2 size={36} className="text-emerald-500 mx-auto mb-2" />
+            <p className="text-sm font-semibold text-slate-800">No Critical or High Risk Orders</p>
+            <p className="text-xs text-slate-500 mt-1">All outstanding client orders fall within routine processing tolerances.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-2">
+            {priorityOrders.orders.slice(0, 6).map((order: any) => {
+              const isCrit = order.priority === 'CRITICAL';
+              const border = isCrit ? 'border-l-4 border-l-rose-500' : 'border-l-4 border-l-amber-500';
+              const pBadge = isCrit
+                ? 'bg-rose-100 text-rose-800 border-rose-200'
+                : 'bg-amber-100 text-amber-800 border-amber-200';
+
+              return (
+                <div
+                  key={order.id}
+                  className={`p-4 rounded-xl bg-slate-50/80 hover:bg-white border border-slate-200 hover:shadow-md transition-all flex flex-col justify-between ${border}`}
+                >
+                  <div>
+                    <div className="flex justify-between items-start gap-2">
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold uppercase border ${pBadge}`}>
+                        {order.priority} • {order.priorityScore || 0}
+                      </span>
+                      <span className="text-xs font-mono font-bold text-slate-900">
+                        {formatCurrency(order.totalAmount || 0, currency)}
+                      </span>
+                    </div>
+
+                    <div className="mt-2.5">
+                      <Link
+                        to={`/dashboard/orders/${order.id}`}
+                        className="text-sm font-bold text-slate-900 hover:text-primary-600 hover:underline block truncate"
+                      >
+                        {order.orderNumber}
+                      </Link>
+                      <p className="text-xs text-slate-600 font-medium truncate mt-0.5">
+                        {order.customer?.name || 'Customer'}
+                      </p>
+                    </div>
+
+                    <div className="mt-2 flex items-center justify-between text-xs">
+                      <span className="text-slate-500 text-[11px]">Payment Trust:</span>
+                      {getScoreBadge(order.customer?.paymentScore, order.customer?.paymentScoreCategory)}
+                    </div>
+
+                    {order.priorityReason && (
+                      <p className="text-[11px] text-slate-600 mt-2 bg-white/90 p-2 rounded border border-slate-200/80 line-clamp-2 leading-relaxed">
+                        <strong className="text-slate-800 font-semibold">Priority Driver:</strong> {order.priorityReason}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="mt-3 pt-2.5 border-t border-slate-200/70 flex items-center justify-between text-xs">
+                    <span className="text-slate-400 font-mono text-[10px]">
+                      {new Date(order.createdAt).toLocaleDateString()}
+                    </span>
+                    <Link
+                      to={`/dashboard/orders/${order.id}`}
+                      className="text-primary-600 hover:text-primary-800 font-semibold flex items-center gap-0.5"
+                    >
+                      Process &rarr;
+                    </Link>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         {/* C. What Needs You Now (Action Zone) */}
@@ -759,6 +924,170 @@ export default function DashboardOverview() {
             <span>Operating Currency: <strong className="text-slate-700">{currency}</strong></span>
             <Link to="/dashboard/orders" className="text-primary-600 hover:underline font-semibold">
               Manage Orders &rarr;
+            </Link>
+          </div>
+        </section>
+      </div>
+
+      {/* Customer Payment Intelligence & Vendor Verification Hub */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Customer Payment Health & Debt Exposure (2 cols) */}
+        <section className="lg:col-span-2 bg-white/95 backdrop-blur-xl p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+          <div>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                  <CreditCard className="text-primary-600" size={20} />
+                  Customer Payment Score &amp; Credit Exposure
+                </h2>
+                <p className="text-xs text-slate-500 mt-1">
+                  Transparent 0–100 scoring based on on-time settlements, payment completion, timeliness, and debt risk.
+                </p>
+              </div>
+              <div className="text-right">
+                <span className="text-xs text-slate-500 font-medium">Total Customer Debt:</span>
+                <span className="font-extrabold text-slate-900 ml-1.5 text-sm">
+                  {formatCurrency(customerHealth?.summary?.totalOutstandingAll || 0, currency)}
+                </span>
+                {customerHealth?.summary?.totalOverdueAll > 0 && (
+                  <span className="block text-[11px] font-bold text-rose-600">
+                    Overdue: {formatCurrency(customerHealth.summary.totalOverdueAll, currency)}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Score Distribution Pills */}
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 p-3.5 bg-slate-50 rounded-xl border border-slate-200/80 mb-5">
+              <div className="text-center p-2 rounded-lg bg-emerald-50 border border-emerald-100">
+                <span className="text-[10px] uppercase font-bold text-emerald-800 block">Strong (80-100)</span>
+                <span className="text-lg font-extrabold text-emerald-700">{customerHealth?.summary?.strongCount || 0}</span>
+              </div>
+              <div className="text-center p-2 rounded-lg bg-blue-50 border border-blue-100">
+                <span className="text-[10px] uppercase font-bold text-blue-800 block">Good (60-79)</span>
+                <span className="text-lg font-extrabold text-blue-700">{customerHealth?.summary?.goodCount || 0}</span>
+              </div>
+              <div className="text-center p-2 rounded-lg bg-amber-50 border border-amber-100">
+                <span className="text-[10px] uppercase font-bold text-amber-800 block">Caution (40-59)</span>
+                <span className="text-lg font-extrabold text-amber-700">{customerHealth?.summary?.cautionCount || 0}</span>
+              </div>
+              <div className="text-center p-2 rounded-lg bg-rose-50 border border-rose-100">
+                <span className="text-[10px] uppercase font-bold text-rose-800 block">High Risk (&lt;40)</span>
+                <span className="text-lg font-extrabold text-rose-700">{customerHealth?.summary?.highRiskCount || 0}</span>
+              </div>
+              <div className="text-center p-2 rounded-lg bg-slate-100 border border-slate-200 col-span-2 sm:col-span-1">
+                <span className="text-[10px] uppercase font-bold text-slate-600 block">Insufficient History</span>
+                <span className="text-lg font-extrabold text-slate-700">{customerHealth?.summary?.insufficientHistoryCount || 0}</span>
+              </div>
+            </div>
+
+            {/* Top Accounts at Risk */}
+            <div>
+              <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2.5">
+                Accounts Requiring Payment Attention
+              </h3>
+              {!customerHealth?.riskAccounts || customerHealth.riskAccounts.length === 0 ? (
+                <div className="p-4 text-center text-xs text-slate-500 bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
+                  All accounts have zero overdue debt and healthy payment ratings.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {customerHealth.riskAccounts.map((acc: any) => (
+                    <div
+                      key={acc.id}
+                      className="p-3 bg-slate-50 hover:bg-slate-100/70 rounded-xl border border-slate-200/80 flex items-center justify-between text-xs transition"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-slate-900 truncate">{acc.name}</span>
+                          {getScoreBadge(acc.paymentScore, acc.category)}
+                        </div>
+                        <span className="text-slate-500 text-[11px] mt-0.5 block truncate">
+                          {acc.email || acc.phone || 'No direct contact'}
+                        </span>
+                      </div>
+
+                      <div className="text-right shrink-0 ml-3">
+                        <span className="font-bold text-slate-800 block">
+                          Total: {formatCurrency(acc.outstandingBalance || 0, currency)}
+                        </span>
+                        {acc.overdueBalance > 0 && (
+                          <span className="text-rose-600 font-bold text-[11px]">
+                            Overdue: {formatCurrency(acc.overdueBalance, currency)}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+            <span>Verified ledger source: Subledger AR 1200</span>
+            <Link to="/dashboard/orders" className="text-primary-600 hover:underline font-semibold">
+              Filter Overdue in Orders &rarr;
+            </Link>
+          </div>
+        </section>
+
+        {/* Vendor Verification Summary (1 col) */}
+        <section className="bg-white/95 backdrop-blur-xl p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                <ShieldCheck className="text-emerald-600" size={20} />
+                Vendor Verification
+              </h2>
+              <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
+                {vendorSummary?.totalVendors || 0} Registered
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 mb-4 leading-relaxed">
+              Automated statutory GSTIN/EIN validation, SSRF-guarded domain checks, and compliance status.
+            </p>
+
+            <div className="space-y-3">
+              <div className="flex justify-between items-center p-3 rounded-xl bg-emerald-50 border border-emerald-100 text-xs">
+                <span className="font-semibold text-emerald-900 flex items-center gap-1.5">
+                  <CheckCircle2 size={14} className="text-emerald-600" />
+                  Verified Partners
+                </span>
+                <span className="font-extrabold text-emerald-800 text-sm">
+                  {vendorSummary?.statusCounts?.VERIFIED || 0}
+                </span>
+              </div>
+
+              <div className="flex justify-between items-center p-3 rounded-xl bg-amber-50 border border-amber-100 text-xs">
+                <span className="font-semibold text-amber-900 flex items-center gap-1.5">
+                  <Clock size={14} className="text-amber-600" />
+                  Partial / In Pipeline
+                </span>
+                <span className="font-extrabold text-amber-800 text-sm">
+                  {(vendorSummary?.statusCounts?.PARTIALLY_VERIFIED || 0) + (vendorSummary?.statusCounts?.PENDING_VERIFICATION || 0)}
+                </span>
+              </div>
+
+              <div className="flex justify-between items-center p-3 rounded-xl bg-rose-50 border border-rose-100 text-xs">
+                <span className="font-semibold text-rose-900 flex items-center gap-1.5">
+                  <AlertCircle size={14} className="text-rose-600" />
+                  Failed / Review Required
+                </span>
+                <span className="font-extrabold text-rose-800 text-sm">
+                  {(vendorSummary?.statusCounts?.VERIFICATION_FAILED || 0) + (vendorSummary?.statusCounts?.MANUAL_REVIEW_REQUIRED || 0)}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-6 pt-4 border-t border-slate-100">
+            <Link
+              to="/dashboard/vendors"
+              className="w-full py-2.5 px-4 bg-gradient-to-r from-primary-600 to-indigo-600 hover:from-primary-700 hover:to-indigo-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-sm"
+            >
+              <ShieldCheck size={14} />
+              Open Vendor Centre &rarr;
             </Link>
           </div>
         </section>
@@ -1148,6 +1477,23 @@ export default function DashboardOverview() {
           </p>
         </section>
       </div>
+
+      {/* Create Order Modal */}
+      <CreateOrderModal
+        isOpen={isCreateOrderOpen}
+        onClose={() => setIsCreateOrderOpen(false)}
+        onOrderCreated={(newOrder) => {
+          setIsCreateOrderOpen(false);
+          addToast({
+            type: 'success',
+            title: 'Order Created',
+            message: `Order ${newOrder.orderNumber} successfully registered with priority ${newOrder.priority || 'NORMAL'}`
+          });
+          fetchData(true);
+        }}
+        businessId={business.id}
+        currency={currency}
+      />
     </div>
   );
 }

@@ -27,6 +27,7 @@ model User {
   orderStatusChanges   OrderStatusHistory[]
   documentTemplates    DocumentTemplate[]
   postedJournalEntries JournalEntry[]       @relation("JournalPostedBy")
+  vendorVerificationLogs VendorVerificationLog[]
 }
 
 model Business {
@@ -70,6 +71,8 @@ model Business {
   journalEntries         JournalEntry[]
   accountingPeriods      AccountingPeriod[]
   bankFeedAccounts       BankFeedAccount[]
+  vendors                Vendor[]
+  vendorVerificationLogs VendorVerificationLog[]
 }
 
 model WorkflowFieldDefinition {
@@ -558,6 +561,14 @@ model Customer {
   createdAt  DateTime       @default(now())
   updatedAt  DateTime       @updatedAt
 
+  paymentScore             Float?
+  paymentScoreCategory     String?
+  paymentScoreFactors      Json?
+  paymentScoreCalculatedAt DateTime?
+  creditLimit              Float?         @default(0)
+  totalOutstanding         Float?         @default(0)
+  overdueBalance           Float?         @default(0)
+
   business   Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
   enquiries  Enquiry[]
   orders     Order[]
@@ -705,6 +716,21 @@ model Order {
   assignedTo String?
   notes      String?
 
+  priority          String   @default("NORMAL")
+  priorityScore     Float    @default(0)
+  priorityReason    String?
+  priorityFactors   Json?
+
+  paymentStatus     String   @default("UNPAID")
+  amountPaid        Float    @default(0)
+  outstandingAmount Float    @default(0)
+  paymentTerms      String?
+  lineItems         Json?
+  idempotencyKey    String?
+
+  vendorId          String?
+  vendor            Vendor?  @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -720,10 +746,14 @@ model Order {
   Payment       Payment[]
 
   @@unique([businessId, orderNumber])
+  @@unique([businessId, idempotencyKey])
   @@index([businessId])
   @@index([customerId])
   @@index([enquiryId])
   @@index([status])
+  @@index([businessId, priority])
+  @@index([businessId, paymentStatus])
+  @@index([vendorId])
 }
 
 model OrderStatusHistory {
@@ -1318,5 +1348,75 @@ model FinanceAuditLog {
   timestamp      DateTime      @default(now())
 
   journalEntry   JournalEntry? @relation(fields: [journalEntryId], references: [id], onDelete: SetNull)
+  @@index([businessId])
+}
+
+// ===========================================
+// VENDOR CENTRE & ONLINE VERIFICATION (Feature 5)
+// ===========================================
+
+enum VendorVerificationStatus {
+  PENDING_VERIFICATION
+  IN_PROGRESS
+  VERIFIED
+  PARTIALLY_VERIFIED
+  VERIFICATION_FAILED
+  MANUAL_REVIEW_REQUIRED
+  EXPIRED_VERIFICATION
+}
+
+model Vendor {
+  id                    String                   @id @default(uuid())
+  businessId            String
+  name                  String
+  legalName             String?
+  taxId                 String?
+  registrationNumber    String?
+  email                 String?
+  website               String?
+  phone                 String?
+  address               Json?
+  category              String?
+  status                String                   @default("ACTIVE")
+  
+  verificationStatus    VendorVerificationStatus @default(PENDING_VERIFICATION)
+  verificationMethod    String?
+  providerReference     String?
+  verifiedAt            DateTime?
+  verificationExpiresAt DateTime?
+  failureReason         String?
+  verificationEvidence  Json?
+  metadata              Json?
+
+  createdAt             DateTime                 @default(now())
+  updatedAt             DateTime                 @updatedAt
+
+  business              Business                 @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  orders                Order[]
+  verificationLogs      VendorVerificationLog[]
+
+  @@unique([businessId, name])
+  @@index([businessId])
+  @@index([businessId, verificationStatus])
+}
+
+model VendorVerificationLog {
+  id            String   @id @default(uuid())
+  vendorId      String
+  businessId    String
+  fromStatus    String?
+  toStatus      String
+  method        String
+  attemptNumber Int      @default(1)
+  details       Json?
+  error         String?
+  performedById String?
+  createdAt     DateTime @default(now())
+
+  vendor        Vendor   @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  business      Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  performedBy   User?    @relation(fields: [performedById], references: [id], onDelete: SetNull)
+
+  @@index([vendorId])
   @@index([businessId])
 }

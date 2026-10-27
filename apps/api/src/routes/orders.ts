@@ -11,9 +11,7 @@ router.use(requireBusinessMembership);
 router.get('/', async (req: any, res) => {
   try {
     const { businessId } = req.params;
-    const { status, customerId, assignedTo } = req.query;
-    
-    const orders = await orderService.getOrders(businessId, { status, customerId, assignedTo });
+    const orders = await orderService.getOrders(businessId, req.query);
     res.json(orders);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -22,11 +20,21 @@ router.get('/', async (req: any, res) => {
 
 router.post('/', async (req: any, res) => {
   try {
-    // Creating directly without enquiry conversion is possible but we mainly rely on convert.
-    // Assuming generic creation is handled via Enquiry -> Order.
-    res.status(501).json({ error: 'Direct order creation not implemented. Use /api/businesses/:businessId/enquiries/:enquiryId/convert-to-order' });
+    const { businessId } = req.params;
+    const userId = req.user?.id;
+    
+    // Support idempotencyKey via header or body
+    const idempotencyKey = req.headers['idempotency-key'] || req.body.idempotencyKey;
+    const payload = {
+      ...req.body,
+      idempotencyKey
+    };
+
+    const order = await orderService.createManualOrder(businessId, payload, userId);
+    res.status(201).json(order);
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    console.error('Order creation error:', error);
+    res.status(400).json({ error: error.message || 'Failed to create order' });
   }
 });
 
@@ -34,6 +42,9 @@ router.get('/:id', async (req: any, res) => {
   try {
     const { businessId, id } = req.params;
     const order = await orderService.getOrder(businessId, id);
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
     res.json(order);
   } catch (error: any) {
     res.status(404).json({ error: error.message });
@@ -139,6 +150,29 @@ router.post('/:id/generate-invoice', async (req: any, res) => {
   } catch (error: any) {
     console.error('[Invoice Generation Error]:', error);
     res.status(500).json({ error: error?.message || error?.toString() || 'Unknown error' });
+  }
+});
+
+router.post('/:id/priority/recalculate', async (req: any, res) => {
+  try {
+    const { businessId, id } = req.params;
+    const { orderPriorityService } = require('../services/order/OrderPriorityService');
+    const result = await orderPriorityService.updateOrderPriority(businessId, id);
+    res.json(result);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+router.get('/:id/financial-summary', async (req: any, res) => {
+  try {
+    const { businessId, id } = req.params;
+    const { customerBalanceService } = require('../services/finance/CustomerBalanceService');
+    const order = await orderService.getOrder(businessId, id);
+    const summary = await customerBalanceService.getCustomerFinancialSummary(businessId, order.customerId, id);
+    res.json(summary);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
   }
 });
 

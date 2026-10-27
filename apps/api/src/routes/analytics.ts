@@ -712,4 +712,182 @@ router.get('/insights', async (req: AuthRequest, res) => {
   }
 });
 
+// GET /priority-orders — Prominent High-Priority Orders Intelligence
+router.get('/priority-orders', async (req: AuthRequest, res) => {
+  try {
+    const businessId = req.params.businessId;
+    const orders = await prisma.order.findMany({
+      where: {
+        businessId,
+        status: { notIn: ['COMPLETED', 'DELIVERED', 'CANCELLED'] }
+      },
+      include: {
+        customer: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            phone: true,
+            paymentScore: true,
+            paymentScoreCategory: true,
+            creditLimit: true,
+            totalOutstanding: true,
+            overdueBalance: true
+          }
+        },
+        vendor: {
+          select: { id: true, name: true, verificationStatus: true }
+        }
+      },
+      orderBy: [
+        { priorityScore: 'desc' },
+        { createdAt: 'desc' }
+      ],
+      take: 10
+    });
+
+    const criticalCount = orders.filter(o => o.priority === 'CRITICAL').length;
+    const highCount = orders.filter(o => o.priority === 'HIGH').length;
+
+    res.json({
+      success: true,
+      data: {
+        orders,
+        summary: {
+          totalPriorityOrders: orders.length,
+          criticalCount,
+          highCount
+        }
+      }
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /customer-health — Customer Payment Scores & Exposure Distribution
+router.get('/customer-health', async (req: AuthRequest, res) => {
+  try {
+    const businessId = req.params.businessId;
+
+    const customers = await prisma.customer.findMany({
+      where: { businessId },
+      include: {
+        invoices: {
+          where: { status: { in: ['ISSUED', 'SENT', 'PARTIALLY_PAID', 'PAID', 'OVERDUE'] } },
+          select: { totalAmount: true, paidAmount: true, outstandingAmount: true, status: true, dueDate: true, invoiceDate: true }
+        }
+      },
+      take: 20
+    });
+
+    let strongCount = 0;
+    let goodCount = 0;
+    let cautionCount = 0;
+    let highRiskCount = 0;
+    let insufficientHistoryCount = 0;
+    let totalOutstandingAll = 0;
+    let totalOverdueAll = 0;
+
+    const enrichedCustomers = customers.map(c => {
+      const invoices = c.invoices || [];
+      const outstanding = invoices.reduce((s, i) => s + (i.outstandingAmount || 0), 0);
+      const now = new Date();
+      const overdue = invoices.reduce((s, i) => {
+        const due = i.dueDate ? new Date(i.dueDate) : new Date(new Date(i.invoiceDate).getTime() + 30 * 86400000);
+        return (now > due && i.outstandingAmount > 0) ? s + i.outstandingAmount : s;
+      }, 0);
+
+      totalOutstandingAll += outstanding;
+      totalOverdueAll += overdue;
+
+      const score = c.paymentScore;
+      const category = c.paymentScoreCategory || (invoices.length < 2 ? 'INSUFFICIENT_HISTORY' : 'GOOD');
+
+      if (category === 'STRONG') strongCount++;
+      else if (category === 'GOOD') goodCount++;
+      else if (category === 'CAUTION') cautionCount++;
+      else if (category === 'HIGH_RISK') highRiskCount++;
+      else insufficientHistoryCount++;
+
+      return {
+        id: c.id,
+        name: c.name,
+        email: c.email,
+        phone: c.phone,
+        paymentScore: score,
+        category,
+        creditLimit: c.creditLimit || 0,
+        outstandingBalance: outstanding,
+        overdueBalance: overdue,
+        invoiceCount: invoices.length
+      };
+    });
+
+    // Top accounts needing attention (highest overdue or lowest score)
+    const riskAccounts = [...enrichedCustomers]
+      .filter(c => c.overdueBalance > 0 || (c.paymentScore !== null && c.paymentScore < 50))
+      .sort((a, b) => b.overdueBalance - a.overdueBalance)
+      .slice(0, 5);
+
+    res.json({
+      success: true,
+      data: {
+        customers: enrichedCustomers,
+        riskAccounts,
+        summary: {
+          strongCount,
+          goodCount,
+          cautionCount,
+          highRiskCount,
+          insufficientHistoryCount,
+          totalOutstandingAll,
+          totalOverdueAll
+        }
+      }
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /vendor-summary — Vendor Verification Summary
+router.get('/vendor-summary', async (req: AuthRequest, res) => {
+  try {
+    const businessId = req.params.businessId;
+
+    const vendors = await prisma.vendor.findMany({
+      where: { businessId },
+      select: { id: true, name: true, verificationStatus: true, verifiedAt: true, category: true }
+    });
+
+    const statusCounts = {
+      VERIFIED: 0,
+      PARTIALLY_VERIFIED: 0,
+      PENDING_VERIFICATION: 0,
+      VERIFICATION_FAILED: 0,
+      MANUAL_REVIEW_REQUIRED: 0,
+      EXPIRED_VERIFICATION: 0
+    };
+
+    for (const v of vendors) {
+      const st = v.verificationStatus as keyof typeof statusCounts;
+      if (statusCounts[st] !== undefined) {
+        statusCounts[st]++;
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        totalVendors: vendors.length,
+        statusCounts,
+        recentVendors: vendors.slice(0, 5)
+      }
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

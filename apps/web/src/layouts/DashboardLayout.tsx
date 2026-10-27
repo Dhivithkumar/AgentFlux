@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Outlet, Link, useNavigate } from 'react-router-dom';
 import { apiCall } from '../lib/api';
-import { Activity, LayoutDashboard, Settings, ChevronDown, CheckCircle, LogOut, Plus, Building2, Calendar, Landmark } from 'lucide-react';
+import { Activity, LayoutDashboard, Settings, ChevronDown, CheckCircle, LogOut, Plus, Building2, Calendar, Landmark, ShieldCheck } from 'lucide-react';
 import { ToastProvider } from '../components/ui/Toast';
 
 export default function DashboardLayout() {
@@ -83,6 +83,7 @@ export default function DashboardLayout() {
     { name: 'Business Data', path: '/dashboard/business-data' },
     { name: 'Finance', isHeader: true },
     { name: 'Finance Centre', path: '/dashboard/finance', icon: Landmark },
+    { name: 'Vendor Centre', path: '/dashboard/vendors', icon: ShieldCheck },
     { name: 'Automations', isHeader: true },
     { name: 'Workflow Packs', path: '/dashboard/workflow-packs' },
     { name: 'Workflow Center', path: '/dashboard/workflows' },

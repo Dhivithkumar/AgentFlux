@@ -8,7 +8,7 @@ export class OrderService {
   async generateOrderNumber(businessId: string): Promise<string> {
     const count = await prisma.order.count({ where: { businessId } });
     const sequence = (count + 1).toString().padStart(6, '0');
-    return `AF-ORD-${sequence}`;
+    return `ORD-${sequence}`;
   }
 
   async processQuotationAcceptance(businessId: string, customerId: string, message: string, threadId: string) {
@@ -369,42 +369,408 @@ Aasha Furniture Team`;
     return order;
   }
 
+  async createManualOrder(businessIdOrData: any, maybeData?: any, maybeUserId?: string): Promise<any> {
+    let businessId: string;
+    let data: any;
+    let userId: string | undefined;
+
+    if (typeof businessIdOrData === 'object' && businessIdOrData !== null) {
+      businessId = businessIdOrData.businessId;
+      data = businessIdOrData;
+      userId = businessIdOrData.userId || maybeUserId;
+    } else {
+      businessId = businessIdOrData;
+      data = maybeData || {};
+      userId = maybeUserId;
+    }
+    const { orderPriorityService } = await import('./OrderPriorityService');
+    const { customerBalanceService } = await import('../finance/CustomerBalanceService');
+    const { customerPaymentScoreService } = await import('../customer/CustomerPaymentScoreService');
+
+    // 1. Idempotency Check: if idempotencyKey was provided, check if order exists
+    if (data.idempotencyKey) {
+      const existing = await prisma.order.findUnique({
+        where: {
+          businessId_idempotencyKey: {
+            businessId,
+            idempotencyKey: data.idempotencyKey
+          }
+        },
+        include: {
+          customer: true,
+          vendor: true,
+          statusHistory: true
+        }
+      });
+      if (existing) {
+        return existing;
+      }
+    }
+
+    // 2. Resolve or Create Customer
+    let customerId = data.customerId;
+    if (!customerId && (data.customerName || data.customerEmail || data.customerPhone)) {
+      // Find or create customer
+      const existingCustomer = await prisma.customer.findFirst({
+        where: {
+          businessId,
+          OR: [
+            ...(data.customerEmail ? [{ email: data.customerEmail }] : []),
+            ...(data.customerPhone ? [{ phone: data.customerPhone }] : [])
+          ]
+        }
+      });
+
+      if (existingCustomer) {
+        customerId = existingCustomer.id;
+      } else {
+        const newCustomer = await prisma.customer.create({
+          data: {
+            businessId,
+            name: data.customerName || 'Direct Customer',
+            email: data.customerEmail || null,
+            phone: data.customerPhone || null,
+            source: 'MANUAL_ENTRY',
+            creditLimit: data.creditLimit ? Number(data.creditLimit) : 0,
+            customData: data.customerAddress ? { address: data.customerAddress } : undefined
+          }
+        });
+        customerId = newCustomer.id;
+      }
+    }
+
+    if (!customerId) {
+      throw new Error('A customer must be selected or customer details provided.');
+    }
+
+    // 3. Process Line Items and Calculate Totals
+    const rawItems = Array.isArray(data.items) ? data.items : [];
+    if (rawItems.length === 0 && !data.totalAmount) {
+      throw new Error('At least one order line item or a total amount is required.');
+    }
+
+    let subtotal = 0;
+    let totalDiscount = 0;
+    let totalTax = 0;
+
+    const lineItems = rawItems.map((item: any) => {
+      const qty = Number(item.quantity || 1);
+      const unitPrice = Number(item.unitPrice || 0);
+      const discount = Number(item.discount || 0);
+      const taxRate = Number(item.taxRate || 0);
+
+      const itemSubtotal = qty * unitPrice;
+      const taxableAmount = Math.max(0, itemSubtotal - discount);
+      const itemTax = (taxableAmount * taxRate) / 100;
+      const lineTotal = taxableAmount + itemTax;
+
+      subtotal += itemSubtotal;
+      totalDiscount += discount;
+      totalTax += itemTax;
+
+      return {
+        productName: item.productName || item.description || 'Product / Service',
+        description: item.description || '',
+        quantity: qty,
+        unitPrice,
+        discount,
+        taxRate,
+        lineTotal: Math.round(lineTotal * 100) / 100
+      };
+    });
+
+    const calculatedTotal = Math.max(0, subtotal - totalDiscount + totalTax);
+    const totalAmount = data.totalAmount !== undefined ? Number(data.totalAmount) : calculatedTotal;
+
+    // 4. Paid and Outstanding Amounts
+    const amountPaid = Number(data.paidAmount || data.amountPaid || 0);
+    const outstandingAmount = Math.max(0, totalAmount - amountPaid);
+    
+    let paymentStatus = data.paymentStatus || 'UNPAID';
+    if (totalAmount > 0 && amountPaid >= totalAmount) {
+      paymentStatus = 'PAID';
+    } else if (amountPaid > 0 && amountPaid < totalAmount) {
+      paymentStatus = 'PARTIALLY_PAID';
+    } else {
+      paymentStatus = 'UNPAID';
+    }
+
+    // 5. Customer Financial Exposure and Priority Evaluation
+    const financialSummary = await customerBalanceService.getCustomerFinancialSummary(
+      businessId,
+      customerId
+    );
+
+    const initialDueAt = data.dueAt ? new Date(data.dueAt) : null;
+    const initialStatus = data.status || 'CONFIRMED';
+
+    const priorityEval = orderPriorityService.evaluateOrderPriority(
+      {
+        totalAmount,
+        dueAt: initialDueAt,
+        status: initialStatus,
+        paymentStatus
+      },
+      financialSummary,
+      0,
+      0
+    );
+
+    // 6. Generate Unique Order Number and Persist Transactionally
+    let order;
+    let attempts = 0;
+    while (attempts < 5) {
+      attempts++;
+      const orderNumber = await this.generateOrderNumber(businessId);
+
+      try {
+        order = await prisma.$transaction(async (tx) => {
+          const createdOrder = await tx.order.create({
+            data: {
+              businessId,
+              customerId,
+              orderNumber,
+              status: initialStatus,
+              source: data.source || 'MANUAL',
+              subtotal,
+              discount: totalDiscount,
+              tax: totalTax,
+              totalAmount,
+              currency: data.currency || 'INR',
+              dueAt: initialDueAt,
+              scheduledAt: data.scheduledAt ? new Date(data.scheduledAt) : null,
+              notes: data.notes || null,
+              assignedTo: data.assignedTo || null,
+              idempotencyKey: data.idempotencyKey || null,
+              vendorId: data.vendorId || null,
+
+              priority: priorityEval.priority,
+              priorityScore: priorityEval.priorityScore,
+              priorityReason: priorityEval.priorityReason,
+              priorityFactors: priorityEval.riskFlags as any,
+
+              paymentStatus,
+              amountPaid,
+              outstandingAmount,
+              paymentTerms: data.paymentTerms || 'NET_30',
+              lineItems: lineItems as any,
+              structuredData: {
+                lineItems,
+                paymentTerms: data.paymentTerms || 'NET_30',
+                createdManually: true,
+                creditWarning: financialSummary.creditBreached
+              },
+              statusHistory: {
+                create: {
+                  toStatus: initialStatus,
+                  reason: data.statusReason || 'Manual order creation',
+                  changedById: userId || null
+                }
+              }
+            },
+            include: {
+              customer: true,
+              vendor: true,
+              statusHistory: true
+            }
+          });
+
+          // If an initial payment occurred, record it in Payment table
+          if (amountPaid > 0 && data.recordPaymentNow) {
+            await tx.payment.create({
+              data: {
+                businessId,
+                customerId,
+                orderId: createdOrder.id,
+                invoiceId: createdOrder.id, // linked to order
+                amount: amountPaid,
+                currency: data.currency || 'INR',
+                status: 'SUCCEEDED',
+                provider: data.paymentMethod || 'MANUAL',
+                method: data.paymentMethod || 'CASH_OR_TRANSFER',
+                paidAt: new Date()
+              }
+            });
+          }
+
+          return createdOrder;
+        });
+
+        break;
+      } catch (err: any) {
+        if (err.code === 'P2002') {
+          // unique constraint violation on orderNumber or idempotencyKey
+          if (err.meta?.target?.includes('idempotencyKey') && data.idempotencyKey) {
+            return await prisma.order.findUnique({
+              where: {
+                businessId_idempotencyKey: {
+                  businessId,
+                  idempotencyKey: data.idempotencyKey
+                }
+              },
+              include: { customer: true, vendor: true }
+            });
+          }
+          continue; // retry with new orderNumber
+        }
+        throw err;
+      }
+    }
+
+    if (!order) {
+      throw new Error('Failed to create order due to concurrent collision');
+    }
+
+    // 7. Recalculate customer score and exposure asynchronously
+    customerPaymentScoreService.calculateAndPersistScore(businessId, customerId).catch(console.error);
+
+    // 8. Publish Event and Operational Sync
+    EventBus.publish(businessId, 'ORDER_CREATED', {
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      customerId: order.customerId,
+      totalAmount: order.totalAmount,
+      priority: order.priority
+    });
+
+    operationalSyncPoller.enqueue(businessId, 'ORDER', order.id, 'CREATE').catch(console.error);
+
+    return order;
+  }
+
   async getOrders(businessId: string, filters: any = {}) {
     const where: any = { businessId };
     
     if (filters.status) where.status = filters.status;
     if (filters.customerId) where.customerId = filters.customerId;
     if (filters.assignedTo) where.assignedTo = filters.assignedTo;
+    if (filters.priority) where.priority = filters.priority;
+    if (filters.paymentStatus) where.paymentStatus = filters.paymentStatus;
+    if (filters.vendorId) where.vendorId = filters.vendorId;
+
+    if (filters.overdueOnly === 'true' || filters.overdueOnly === true) {
+      where.dueAt = { lt: new Date() };
+      where.status = { notIn: ['COMPLETED', 'DELIVERED', 'CANCELLED'] };
+    }
+
+    if (filters.search) {
+      const q = String(filters.search).trim();
+      where.OR = [
+        { orderNumber: { contains: q, mode: 'insensitive' } },
+        { customer: { name: { contains: q, mode: 'insensitive' } } },
+        { customer: { phone: { contains: q, mode: 'insensitive' } } },
+        { customer: { email: { contains: q, mode: 'insensitive' } } }
+      ];
+    }
     
     return prisma.order.findMany({
       where,
       include: {
         customer: true,
-        assignee: true
+        vendor: true,
+        assignee: true,
+        invoices: {
+          select: { id: true, invoiceNumber: true, status: true, totalAmount: true, paidAmount: true, outstandingAmount: true }
+        },
+        Payment: {
+          where: { status: 'SUCCEEDED' },
+          select: { id: true, amount: true, provider: true, paidAt: true }
+        }
       },
-      orderBy: { createdAt: 'desc' }
+      orderBy: filters.sortBy === 'priority' 
+        ? [{ priorityScore: 'desc' }, { createdAt: 'desc' }]
+        : { createdAt: 'desc' }
     });
   }
 
-  async getOrder(businessId: string, orderId: string) {
-    const order = await prisma.order.findUnique({
-      where: { id: orderId, businessId },
-      include: {
-        customer: true,
-        enquiry: true,
-        assignee: true,
-        statusHistory: {
-          include: { changedBy: true },
-          orderBy: { createdAt: 'desc' }
+  async getOrder(param1: string, param2?: string) {
+    const { customerBalanceService } = await import('../finance/CustomerBalanceService');
+    let order: any = null;
+    let businessId = param1;
+    let orderId = param2;
+
+    if (param2) {
+      order = await prisma.order.findFirst({
+        where: { id: param2, businessId: param1 },
+        include: {
+          customer: true,
+          vendor: true,
+          enquiry: true,
+          assignee: true,
+          invoices: {
+            include: { payments: true }
+          },
+          Payment: true,
+          statusHistory: {
+            include: { changedBy: true },
+            orderBy: { createdAt: 'desc' }
+          }
+        }
+      });
+
+      if (!order) {
+        order = await prisma.order.findFirst({
+          where: { id: param1, businessId: param2 },
+          include: {
+            customer: true,
+            vendor: true,
+            enquiry: true,
+            assignee: true,
+            invoices: {
+              include: { payments: true }
+            },
+            Payment: true,
+            statusHistory: {
+              include: { changedBy: true },
+              orderBy: { createdAt: 'desc' }
+            }
+          }
+        });
+        if (order) {
+          businessId = param2;
+          orderId = param1;
         }
       }
-    });
-
-    if (!order) {
-      throw new Error('Order not found');
+    } else {
+      order = await prisma.order.findUnique({
+        where: { id: param1 },
+        include: {
+          customer: true,
+          vendor: true,
+          enquiry: true,
+          assignee: true,
+          invoices: {
+            include: { payments: true }
+          },
+          Payment: true,
+          statusHistory: {
+            include: { changedBy: true },
+            orderBy: { createdAt: 'desc' }
+          }
+        }
+      });
+      if (order) {
+        businessId = order.businessId;
+        orderId = order.id;
+      }
     }
 
-    return order;
+    if (!order) {
+      return null;
+    }
+
+    // Attach real-time customer financial exposure
+    let financialSummary: any = null;
+    try {
+      financialSummary = await customerBalanceService.getCustomerFinancialSummary(businessId, order.customerId, order.id);
+    } catch (e) {
+      // fallback
+    }
+
+    return {
+      ...order,
+      financialSummary
+    };
   }
 
   async updateOrderStatus(businessId: string, orderId: string, newStatus: string, userId: string, reason?: string) {

@@ -4,6 +4,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+// Reloaded with authentic database configuration
 
 import authRoutes from './routes/auth';
 import businessRoutes from './routes/businesses';
@@ -71,9 +72,12 @@ app.use('/api/businesses/:businessId/governance', governanceRoutes);
 app.use('/api/businesses/:businessId/approvals', genericApprovalsRoutes);
 app.use('/api/businesses/:businessId/agents', agentsRoutes);
 app.use('/api/businesses/:businessId/analytics', analyticsRoutes);
-app.use('/api/businesses/:businessId/workflow-packs', workflowPacksRoutes);
+import customersRouter from './routes/customers';
+import vendorsRouter from './routes/vendors';
 import financeRouter from './routes/finance';
 
+app.use('/api/businesses/:businessId/customers', customersRouter);
+app.use('/api/businesses/:businessId/vendors', vendorsRouter);
 app.use('/api/businesses/:businessId/finance', financeRouter);
 app.use('/api/businesses/:businessId', paymentsRouter); // mounts /invoices/:invoiceId/payments and /payments/:paymentId/confirm
 app.use('/api/webhooks/payments', paymentWebhooksRouter);
