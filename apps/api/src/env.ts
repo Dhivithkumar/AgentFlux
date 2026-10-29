@@ -13,7 +13,7 @@ const candidatePaths = [
 
 for (const candidate of candidatePaths) {
   if (fs.existsSync(candidate)) {
-    dotenv.config({ path: candidate });
+    dotenv.config({ path: candidate, override: true });
     break;
   }
 }

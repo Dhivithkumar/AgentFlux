@@ -3,7 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
-dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../../.env'), override: true });
 // Reloaded with authentic database configuration
 
 import authRoutes from './routes/auth';
@@ -30,7 +30,9 @@ import { operationalSyncPoller } from './services/queue/operationalSyncPoller';
 const app = express();
 emailPoller.start(10000); // Poll every 10 seconds for testing
 operationalSyncPoller.start(5000); // Poll every 5s for operational sync jobs
-scheduleDailyAnalytics(); // Schedule daily aggregations
+scheduleDailyAnalytics().catch((err) => {
+  console.error('[AnalyticsQueue] Failed to schedule daily analytics:', err.message);
+});
 const port = process.env.NODE_ENV === 'production' ? (process.env.PORT || 3001) : 3001;
 
 app.use(cors());

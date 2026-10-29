@@ -6,6 +6,7 @@ import { encrypt, decrypt } from '../encryption';
 // Very basic poller loop
 export class EmailPoller {
   private isRunning = false;
+  private isPolling = false;
   private intervalId: any = null;
 
   start(intervalMs = 60000) {
@@ -26,6 +27,9 @@ export class EmailPoller {
   }
 
   async poll() {
+    if (this.isPolling) return;
+    this.isPolling = true;
+
     try {
       // 1. Get all active workflows
       const workflows = await prisma.workflow.findMany({
@@ -45,6 +49,8 @@ export class EmailPoller {
       }
     } catch (e) {
       console.error('Error in EmailPoller loop:', e);
+    } finally {
+      this.isPolling = false;
     }
   }
 
