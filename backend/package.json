@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "prisma generate --schema=prisma/schema.prisma && tsc",
+    "build": "pnpm -F @agent-flux/database build && pnpm -F @agent-flux/types build && prisma generate --schema=prisma/schema.prisma && tsc",
     "start": "node dist/index.js",
     "prisma:generate": "prisma generate --schema=prisma/schema.prisma",
     "test:aasha": "tsx src/tests/aasha-grounding-suite.ts"

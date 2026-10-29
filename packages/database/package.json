@@ -1,8 +1,10 @@
 {
   "name": "@agent-flux/database",
   "version": "1.0.0",
-  "main": "index.ts",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "scripts": {
+    "build": "tsc",
     "generate": "prisma generate --schema=../../backend/prisma/schema.prisma",
     "push": "prisma db push --schema=../../backend/prisma/schema.prisma"
   },
