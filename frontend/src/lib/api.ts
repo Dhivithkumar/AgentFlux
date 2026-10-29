@@ -1,4 +1,5 @@
-const API_URL = ((import.meta) as any).env.NEXT_PUBLIC_API_URL || '/api';
+const rawApiUrl = ((import.meta) as any).env.VITE_API_URL || ((import.meta) as any).env.NEXT_PUBLIC_API_URL || '/api';
+const API_URL = rawApiUrl.replace(/\/+$/, '');
 
 export const apiCall = async (endpoint: string, options: RequestInit = {}) => {
   const token = localStorage.getItem('token');
@@ -12,7 +13,8 @@ export const apiCall = async (endpoint: string, options: RequestInit = {}) => {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
+  const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  const response = await fetch(`${API_URL}${cleanEndpoint}`, {
     ...options,
     headers,
   });

@@ -7,8 +7,12 @@
   "scripts": {
     "dev": "pnpm --parallel -r run dev",
     "build": "pnpm --parallel -r run build",
-    "db:generate": "pnpm -F database generate",
-    "db:push": "pnpm -F database push",
+    "dev:frontend": "pnpm --filter frontend dev",
+    "dev:backend": "pnpm --filter backend dev",
+    "build:frontend": "pnpm --filter frontend build",
+    "build:backend": "pnpm --filter backend build",
+    "db:generate": "pnpm --filter @agent-flux/database generate",
+    "db:push": "pnpm --filter @agent-flux/database push",
     "db:bridge": "node scripts/pg_bridge.js"
   },
   "pnpm": {

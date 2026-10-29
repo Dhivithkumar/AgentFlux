@@ -1,7 +1,7 @@
 {
-  "name": "web",
+  "name": "frontend",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite --port 3000",
@@ -9,7 +9,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@agent-flux/types": "workspace:*",
     "@xyflow/react": "^12.12.0",
     "date-fns": "^4.4.0",
     "lucide-react": "^0.373.0",

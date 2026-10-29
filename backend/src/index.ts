@@ -3,7 +3,11 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
-dotenv.config({ path: path.resolve(__dirname, '../../.env'), override: true });
+import fs from 'fs';
+const envPath = fs.existsSync(path.resolve(process.cwd(), '.env'))
+  ? path.resolve(process.cwd(), '.env')
+  : path.resolve(__dirname, '../../.env');
+dotenv.config({ path: envPath, override: true });
 // Reloaded with authentic database configuration
 
 import authRoutes from './routes/auth';
@@ -83,6 +87,10 @@ app.use('/api/businesses/:businessId/vendors', vendorsRouter);
 app.use('/api/businesses/:businessId/finance', financeRouter);
 app.use('/api/businesses/:businessId', paymentsRouter); // mounts /invoices/:invoiceId/payments and /payments/:paymentId/confirm
 app.use('/api/webhooks/payments', paymentWebhooksRouter);
+
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok' });
+});
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' });
