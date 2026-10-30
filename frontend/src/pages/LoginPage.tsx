@@ -1,90 +1,174 @@
 import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { apiCall } from '../lib/api';
+import { Activity, Lock, Mail, Eye, EyeOff, Loader2, ArrowRight, ShieldCheck } from 'lucide-react';
 
 export default function LoginPage() {
   const [formData, setFormData] = useState({ email: 'dhivith.off@gmail.com', password: '123456789' });
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [checkingAuth, setCheckingAuth] = useState(true);
   const navigate = useNavigate();
 
   useEffect(() => {
-    // Auto-login bypass
-    const autoLogin = async () => {
-      setLoading(true);
-      try {
-        const res = await apiCall('/auth/login', {
-          method: 'POST',
-          body: JSON.stringify({ email: 'dhivith.off@gmail.com', password: '123456789' })
-        });
-        localStorage.setItem('token', res.data.token);
-        
-        const busRes = await apiCall('/businesses');
-        if (busRes.data && busRes.data.length > 0) {
+    // If user already holds an existing valid token, transition directly to dashboard
+    const existingToken = localStorage.getItem('token');
+    if (existingToken) {
+      apiCall('/auth/me')
+        .then(() => {
           navigate('/dashboard');
-        } else {
-          navigate('/onboarding');
-        }
-      } catch (err: any) {
-        setError(err.message);
-        setLoading(false);
-      }
-    };
-    autoLogin();
+        })
+        .catch(() => {
+          localStorage.removeItem('token');
+          setCheckingAuth(false);
+        });
+    } else {
+      setCheckingAuth(false);
+    }
   }, [navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setLoading(true);
-    
+
     try {
       const res = await apiCall('/auth/login', {
         method: 'POST',
         body: JSON.stringify(formData)
       });
-      localStorage.setItem('token', res.data.token);
       
-      const busRes = await apiCall('/businesses');
+      if (!res.data?.token) {
+        throw new Error('Authentication failed: no token returned.');
+      }
+      
+      localStorage.setItem('token', res.data.token);
+
+      const busRes = await apiCall('/businesses').catch(() => ({ data: [] }));
       if (busRes.data && busRes.data.length > 0) {
         navigate('/dashboard');
       } else {
         navigate('/onboarding');
       }
     } catch (err: any) {
-      setError(err.message);
+      setError(err.message || 'Invalid credentials or server unavailable.');
     } finally {
       setLoading(false);
     }
   };
 
+  if (checkingAuth) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-400 gap-3">
+        <Activity className="w-8 h-8 text-indigo-500 animate-spin" />
+        <p className="text-sm font-medium">Verifying session...</p>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50 py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-md w-full space-y-8 bg-white p-8 rounded-xl shadow-sm border border-slate-200">
-        <div className="text-center">
-          <h2 className="text-3xl font-extrabold text-slate-900">Sign in to Agent Flux</h2>
-          {loading && <p className="mt-2 text-sm text-slate-600">Auto-logging in...</p>}
+    <div className="min-h-screen bg-slate-950 flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8 relative overflow-hidden">
+      {/* Decorative ambient background glows */}
+      <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-indigo-600/20 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute bottom-10 right-10 w-80 h-80 bg-purple-600/15 rounded-full blur-3xl pointer-events-none" />
+
+      <div className="sm:mx-auto sm:w-full sm:max-w-md relative z-10">
+        <div className="flex justify-center mb-4">
+          <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-violet-500 p-0.5 shadow-xl shadow-indigo-600/30 flex items-center justify-center">
+            <Activity className="text-white w-7 h-7" />
+          </div>
         </div>
-        <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
-          {error && <div className="text-red-500 text-sm text-center bg-red-50 p-2 rounded">{error}</div>}
-          <div className="space-y-4">
+        <h2 className="text-center text-3xl font-extrabold text-white tracking-tight">Agent Flux</h2>
+        <p className="mt-1 text-center text-xs font-medium text-slate-400">
+          Autonomous Enterprise AI Workflow Platform
+        </p>
+      </div>
+
+      <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md relative z-10">
+        <div className="bg-slate-900/90 backdrop-blur-xl py-8 px-6 sm:px-10 shadow-2xl rounded-2xl border border-slate-800 ring-1 ring-white/5">
+          <form className="space-y-5" onSubmit={handleSubmit}>
+            {error && (
+              <div className="rounded-xl bg-rose-500/10 border border-rose-500/30 p-3.5 text-xs text-rose-300 flex items-start gap-2.5">
+                <span className="shrink-0 mt-0.5 text-rose-400 font-bold">!</span>
+                <span className="flex-1">{error}</span>
+              </div>
+            )}
+
             <div>
-              <label className="block text-sm font-medium text-slate-700">Email address</label>
-              <input required type="email" className="mt-1 block w-full border border-slate-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} />
+              <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+                Email address
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
+                  <Mail size={16} />
+                </div>
+                <input
+                  required
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  className="block w-full pl-10 pr-3.5 py-2.5 bg-slate-950/80 border border-slate-700/80 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all"
+                  placeholder="name@company.com"
+                />
+              </div>
             </div>
+
             <div>
-              <label className="block text-sm font-medium text-slate-700">Password</label>
-              <input required type="password" className="mt-1 block w-full border border-slate-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary-500 focus:border-primary-500" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} />
+              <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+                Password
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
+                  <Lock size={16} />
+                </div>
+                <input
+                  required
+                  type={showPassword ? 'text' : 'password'}
+                  value={formData.password}
+                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                  className="block w-full pl-10 pr-10 py-2.5 bg-slate-950/80 border border-slate-700/80 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all"
+                  placeholder="••••••••"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-200"
+                >
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
             </div>
+
+            <div className="pt-2">
+              <button
+                disabled={loading}
+                type="submit"
+                className="w-full flex justify-center items-center gap-2 py-3 px-4 rounded-xl text-sm font-bold text-white bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 focus:ring-offset-slate-900 shadow-lg shadow-indigo-600/30 disabled:opacity-50 transition-all cursor-pointer"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin" />
+                    <span>Signing in...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>Sign In</span>
+                    <ArrowRight size={16} />
+                  </>
+                )}
+              </button>
+            </div>
+          </form>
+
+          <div className="mt-6 pt-6 border-t border-slate-800 text-center">
+            <p className="text-xs text-slate-400">
+              Don't have an account?{' '}
+              <Link to="/register" className="font-semibold text-indigo-400 hover:text-indigo-300 transition-colors">
+                Register now
+              </Link>
+            </p>
           </div>
-          <div>
-            <button disabled={loading} type="submit" className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50">
-              {loading ? 'Signing in...' : 'Sign in'}
-            </button>
-          </div>
-        </form>
-        <div className="text-center text-sm">
-          <Link to="/register" className="text-primary-600 hover:text-primary-500">Don't have an account? Register</Link>
         </div>
       </div>
     </div>

@@ -14,6 +14,12 @@ const CATEGORIES = [
   'RENEWALS'
 ];
 
+const PROMPT_SUGGESTIONS = [
+  "When an inquiry email arrives, search knowledge base for catalog prices, draft a quotation, and schedule consultation",
+  "When payment is received via Razorpay, send WhatsApp receipt and append transaction row to Google Sheets",
+  "When a new quotation is accepted, generate PDF invoice, create customer order, and book dispatch date on calendar"
+];
+
 export default function WorkflowCenter() {
   const { business } = useOutletContext<{ business: any }>();
   const navigate = useNavigate();
@@ -272,23 +278,49 @@ export default function WorkflowCenter() {
                   <button onClick={() => setCreateMode('SELECT')} className="text-sm font-medium text-slate-500 hover:text-slate-800 flex items-center gap-2 mb-4">
                     <ArrowLeft size={16} /> Back
                   </button>
-                  <label className="block font-bold text-slate-900 mb-2">What would you like to automate?</label>
-                  <p className="text-sm text-slate-500 mb-4">Example: "When an email arrives from a VIP client, summarize it and send me a slack message."</p>
+                  <label className="block font-bold text-slate-900 mb-1">What would you like to automate?</label>
+                  <p className="text-xs text-slate-500 mb-3">Describe your process in natural language. Our AI Architect will design the DAG nodes and trigger.</p>
+                  
+                  {/* Suggestion Pills */}
+                  <div className="mb-3">
+                    <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1.5">Try a suggested blueprint:</span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {PROMPT_SUGGESTIONS.map((sug, i) => (
+                        <button
+                          key={i}
+                          type="button"
+                          onClick={() => setPrompt(sug)}
+                          className="text-left text-xs bg-indigo-50/70 hover:bg-indigo-100/70 text-indigo-700 border border-indigo-200/80 rounded-lg px-2.5 py-1.5 transition-colors line-clamp-1"
+                        >
+                          "{sug}"
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
                   <textarea 
                     value={prompt}
                     onChange={(e) => setPrompt(e.target.value)}
-                    className="w-full h-32 border border-slate-300 rounded-xl p-4 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm"
-                    placeholder="Describe your workflow..."
+                    className="w-full h-28 border border-slate-300 rounded-xl p-3.5 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm placeholder:text-slate-400"
+                    placeholder="Describe your workflow (e.g. When inquiry arrives on WhatsApp, fetch catalog pricing, draft quote, and schedule meeting)..."
                   />
-                  <div className="mt-6 flex justify-end gap-3">
-                     <button onClick={() => setShowCreateModal(false)} className="px-4 py-2 font-medium text-slate-600 hover:bg-slate-100 rounded-lg">Cancel</button>
+                  
+                  {generating && (
+                    <div className="mt-3 p-3 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs flex items-center gap-2 animate-pulse">
+                      <Sparkles size={16} className="text-indigo-600 animate-spin" />
+                      <span>Synthesizing DAG nodes, connectors, and execution steps...</span>
+                    </div>
+                  )}
+
+                  <div className="mt-5 flex justify-end gap-3">
+                     <button onClick={() => setShowCreateModal(false)} className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors">Cancel</button>
                      <button 
                        onClick={handleGenerateWorkflow}
                        disabled={generating || !prompt.trim()}
-                       className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg font-medium shadow-sm disabled:opacity-50 flex items-center gap-2"
+                       className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl text-xs font-bold shadow-md shadow-indigo-600/20 disabled:opacity-50 flex items-center gap-2 cursor-pointer transition-all"
                      >
                        {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                       {generating ? 'Generating...' : 'Generate Workflow'}
+                       {generating ? 'Compiling Flow...' : 'Generate Workflow'}
                      </button>
                   </div>
                 </div>

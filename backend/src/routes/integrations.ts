@@ -147,10 +147,10 @@ router.get('/', authenticate, async (req: Request, res: Response) => {
   }
 });
 
-// Start OAuth flow
-router.get('/:provider/connect', authenticate, async (req: Request, res: Response) => {
+// Start OAuth flow (Supports both GET and POST)
+const handleConnectFlow = async (req: Request, res: Response) => {
   const { provider } = req.params;
-  const { businessId } = req.query;
+  const businessId = (req.query.businessId as string) || req.body?.businessId;
   const user = (req as any).user;
 
   if (!businessId || typeof businessId !== 'string') {
@@ -203,7 +203,10 @@ router.get('/:provider/connect', authenticate, async (req: Request, res: Respons
     console.error('Connect Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
-});
+};
+
+router.get('/:provider/connect', authenticate, handleConnectFlow);
+router.post('/:provider/connect', authenticate, handleConnectFlow);
 
 // Shared helper to handle OAuth token exchange & integration storage
 async function processOAuthTokenExchange(code: string, state: string) {
