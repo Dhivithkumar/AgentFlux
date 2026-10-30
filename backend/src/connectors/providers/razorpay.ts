@@ -33,3 +33,4 @@ export class RazorpayConnectorProvider implements ConnectorProvider {
     return ['razorpay.createPaymentLink', 'razorpay.verifyPayment'];
   }
 }
+

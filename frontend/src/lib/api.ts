@@ -1,4 +1,16 @@
-let rawApiUrl = ((import.meta) as any).env.VITE_API_URL || ((import.meta) as any).env.NEXT_PUBLIC_API_URL || '/api';
+let envApi = ((import.meta) as any).env?.VITE_API_URL || ((import.meta) as any).env?.NEXT_PUBLIC_API_URL;
+let rawApiUrl = envApi ? envApi.trim() : '';
+
+if (!rawApiUrl) {
+  // When running in production on Vercel (or any non-localhost domain),
+  // fallback directly to the production Render backend if VITE_API_URL is omitted.
+  if (typeof window !== 'undefined' && !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1')) {
+    rawApiUrl = 'https://agentflux-backend.onrender.com/api';
+  } else {
+    rawApiUrl = '/api';
+  }
+}
+
 rawApiUrl = rawApiUrl.replace(/\/+$/, '');
 
 // If user supplied a full backend URL without /api, ensure /api is appended
@@ -6,7 +18,7 @@ if (rawApiUrl.startsWith('http') && !rawApiUrl.endsWith('/api')) {
   rawApiUrl += '/api';
 }
 
-const API_URL = rawApiUrl;
+export const API_URL = rawApiUrl;
 
 export const apiCall = async (endpoint: string, options: RequestInit = {}) => {
   const token = localStorage.getItem('token');

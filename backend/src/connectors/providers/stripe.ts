@@ -54,3 +54,4 @@ export class StripeConnectorProvider implements ConnectorProvider {
     return ['stripe.createCheckoutSession', 'stripe.createPaymentLink'];
   }
 }
+

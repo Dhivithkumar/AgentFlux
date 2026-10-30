@@ -5,15 +5,16 @@ import { authenticate } from '../middleware/auth';
 import { WorkflowEngine } from '../services/workflow/engine';
 import { WorkflowService } from '../services/workflow/workflowService';
 import { getConnectorDefinition } from '../connectors/registry';
+import { aiManager } from '../services/ai';
 
 const router = Router();
 
-// POST /api/workflows/generate (AI Generation Phase 15)
+// POST /api/workflows/generate (Autonomous AI Workflow Architect)
 router.post('/generate', authenticate, async (req: Request, res: Response) => {
   const { businessId, prompt } = req.body;
   const user = (req as any).user;
 
-  if (!businessId || !prompt) {
+  if (!businessId || !prompt || typeof prompt !== 'string') {
     return res.status(400).json({ success: false, error: 'Missing businessId or prompt' });
   }
 
@@ -23,44 +24,281 @@ router.post('/generate', authenticate, async (req: Request, res: Response) => {
     });
     if (!membership) return res.status(403).json({ success: false, error: 'Access denied' });
 
-    // Mock AI generated response
-    const definition = {
-      nodes: [
-        { id: 'trigger_1', type: 'TRIGGER', config: { event: 'EMAIL_RECEIVED', connector: 'GMAIL' }, next: { DEFAULT: 'ai_agent_1' } },
-        { id: 'ai_agent_1', type: 'AI_AGENT', config: { task: 'Analyze intent of request' }, next: { HIGH_PRIORITY: 'action_1', DEFAULT: 'action_2' } },
-        { id: 'action_1', type: 'ACTION', config: { action: 'Send Slack Alert', connector: 'SLACK' }, next: { DEFAULT: 'action_2' } },
-        { id: 'action_2', type: 'ACTION', config: { action: 'Log to Sheets', connector: 'GOOGLE_SHEETS' } }
-      ]
-    };
+    let generated: {
+      name: string;
+      description: string;
+      category: string;
+      trigger: { type: string; config: any };
+      requiredConnectors: string[];
+      nodes: Array<{
+        id: string;
+        name: string;
+        type: string;
+        config: any;
+        next?: Record<string, string> | null;
+      }>;
+    } | null = null;
 
-    const workflow = await prisma.workflow.create({
-      data: {
-        name: 'AI Generated: ' + prompt.substring(0, 20) + '...',
+    const systemPrompt = `You are the Lead Workflow Architect for Agent Flux, an autonomous AI enterprise workflow automation platform.
+A user wants to automate a business process described below.
+Generate a complete, fully connected, valid, executable Directed Acyclic Graph (DAG) workflow structure formatted as JSON.
+
+User Request: "${prompt}"
+
+Available Connectors:
+- GMAIL (actions: send_email, search_email, create_draft)
+- GOOGLE_CALENDAR (actions: create_event, list_events, check_availability)
+- GOOGLE_SHEETS (actions: append_rows, read_sheet, write_sheet)
+- GOOGLE_DRIVE (actions: upload_file, search_files, create_folder)
+- WHATSAPP (actions: send_message, send_template)
+- RAZORPAY (actions: create_payment_link, fetch_payment)
+- STRIPE (actions: create_payment_intent, create_invoice)
+- NOTION (actions: create_page, append_block)
+- TRELLO (actions: create_card, move_card)
+
+Available Application Actions (actionId):
+- CREATE_CUSTOMER (inputs: name, email, phone)
+- CREATE_ENQUIRY (inputs: customerId, subject, rawMessage, structuredData)
+- CREATE_ORDER (inputs: customerId, subtotal, currency, structuredData)
+- CREATE_QUOTATION (inputs: customerId, lineItems)
+- SEND_QUOTATION (inputs: quotationId)
+- GENERATE_DOCUMENT (inputs: documentType, documentId)
+- PROCESS_INBOUND_EMAIL (inputs: body, from, fromName)
+
+Available Node Types:
+1. TRIGGER: First node that starts the flow.
+   Example: { "id": "node_1", "name": "Inbound Email Trigger", "type": "TRIGGER", "config": { "event": "EMAIL_RECEIVED", "connector": "GMAIL" }, "next": { "DEFAULT": "node_2" } }
+2. AI_AGENT: Autonomous reasoning node that processes text, classifies intent, extracts structured data, or drafts communications.
+   Example: { "id": "node_2", "name": "Analyze Request Intent", "type": "AI_AGENT", "config": { "task": "Extract customer requirements and line items" }, "next": { "DEFAULT": "node_3" } }
+3. RAG_SEARCH: Knowledge base vector retrieval.
+   Example: { "id": "node_3", "name": "Knowledge Search", "type": "RAG_SEARCH", "config": { "query": "{{trigger.subject}}", "limit": 3 }, "next": { "DEFAULT": "node_4" } }
+4. ACTION: Real connector or internal action.
+   Example: { "id": "node_4", "name": "Send WhatsApp Receipt", "type": "ACTION", "config": { "actionId": "send_message", "connector": "WHATSAPP", "message": "Your order is confirmed." }, "next": { "DEFAULT": "node_5" } }
+5. CONDITION: Decision branching based on variables or output.
+   Example: { "id": "node_5", "name": "Check Order Value", "type": "CONDITION", "config": { "field": "steps.node_2.output.amount", "operator": "GREATER_THAN", "value": 10000 }, "next": { "TRUE": "node_6", "FALSE": "node_7", "DEFAULT": "node_7" } }
+6. APPROVAL: Human-in-the-loop checkpoint.
+   Example: { "id": "node_6", "name": "Manager Approval", "type": "APPROVAL", "config": { "title": "Approve high-value order discount" } }
+
+Output strictly valid JSON with this exact schema (no markdown, no backticks, no commentary):
+{
+  "name": "Concise workflow title",
+  "description": "Clear operational summary",
+  "category": "SALES",
+  "trigger": { "type": "EMAIL_RECEIVED", "config": { "connector": "GMAIL", "event": "EMAIL_RECEIVED" } },
+  "requiredConnectors": ["GMAIL", "WHATSAPP"],
+  "nodes": [
+    { "id": "node_1", "name": "Trigger", "type": "TRIGGER", "config": { "event": "EMAIL_RECEIVED", "connector": "GMAIL" }, "next": { "DEFAULT": "node_2" } },
+    { "id": "node_2", "name": "Process Email", "type": "AI_AGENT", "config": { "task": "..." }, "next": { "DEFAULT": "node_3" } }
+  ]
+}`;
+
+    try {
+      const aiRes = await aiManager.generateText({ prompt: systemPrompt });
+      const rawText = aiRes.text?.trim() || '';
+      const cleanJson = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+      const parsed = JSON.parse(cleanJson);
+
+      if (parsed && parsed.name && Array.isArray(parsed.nodes) && parsed.nodes.length > 0) {
+        generated = parsed;
+      }
+    } catch (aiErr) {
+      console.warn('[WorkflowGenerate] AI generation failed or returned invalid JSON. Falling back to dynamic heuristic generation:', aiErr);
+    }
+
+    // Dynamic Heuristic Fallback if AI was unavailable
+    if (!generated) {
+      const lower = prompt.toLowerCase();
+      const hasEmail = lower.includes('email') || lower.includes('gmail') || lower.includes('inbox') || lower.includes('mail');
+      const hasWhatsApp = lower.includes('whatsapp') || lower.includes('wa') || lower.includes('chat') || lower.includes('message');
+      const hasSheets = lower.includes('sheet') || lower.includes('excel') || lower.includes('spreadsheet') || lower.includes('row') || lower.includes('log');
+      const hasCalendar = lower.includes('calendar') || lower.includes('meeting') || lower.includes('appointment') || lower.includes('schedule') || lower.includes('slot');
+      const hasPayment = lower.includes('pay') || lower.includes('invoice') || lower.includes('razorpay') || lower.includes('stripe') || lower.includes('receipt');
+      const hasQuote = lower.includes('quote') || lower.includes('quotation') || lower.includes('pricing') || lower.includes('estimate');
+
+      const triggerConnector = hasWhatsApp && !hasEmail ? 'WHATSAPP' : hasEmail ? 'GMAIL' : hasPayment ? 'RAZORPAY' : 'MANUAL';
+      const triggerEvent = triggerConnector === 'WHATSAPP' ? 'whatsapp.messageReceived' : triggerConnector === 'GMAIL' ? 'EMAIL_RECEIVED' : triggerConnector === 'RAZORPAY' ? 'payment.received' : 'MANUAL';
+      
+      const reqConnectors = new Set<string>();
+      if (triggerConnector !== 'MANUAL') reqConnectors.add(triggerConnector);
+      if (hasSheets) reqConnectors.add('GOOGLE_SHEETS');
+      if (hasCalendar) reqConnectors.add('GOOGLE_CALENDAR');
+      if (hasWhatsApp) reqConnectors.add('WHATSAPP');
+      if (hasPayment) reqConnectors.add('RAZORPAY');
+
+      const nodes: any[] = [];
+      let stepIdx = 1;
+
+      // 1. Trigger Node
+      const trigNodeId = `node_${stepIdx++}`;
+      nodes.push({
+        id: trigNodeId,
+        name: `${triggerConnector === 'MANUAL' ? 'Manual' : triggerConnector} Inbound Trigger`,
+        type: 'TRIGGER',
+        config: { connector: triggerConnector, event: triggerEvent },
+        next: { DEFAULT: `node_${stepIdx}` }
+      });
+
+      // 2. Knowledge Retrieval (if product/quote/order)
+      if (hasQuote || hasEmail || lower.includes('knowledge') || lower.includes('search')) {
+        const ragNodeId = `node_${stepIdx++}`;
+        nodes.push({
+          id: ragNodeId,
+          name: 'Knowledge Base & Catalog Search',
+          type: 'RAG_SEARCH',
+          config: { query: '{{trigger.rawMessage || trigger.body || trigger.subject}}', limit: 3 },
+          next: { DEFAULT: `node_${stepIdx}` }
+        });
+      }
+
+      // 3. AI Agent Reasoning Node
+      const aiNodeId = `node_${stepIdx++}`;
+      nodes.push({
+        id: aiNodeId,
+        name: 'AI Intent & Context Processor',
+        type: 'AI_AGENT',
+        config: { task: `Analyze request and extract structured entities from user prompt: "${prompt}"` },
+        next: { DEFAULT: `node_${stepIdx}` }
+      });
+
+      // 4. Action / Notification Node
+      if (hasCalendar) {
+        const calNodeId = `node_${stepIdx++}`;
+        nodes.push({
+          id: calNodeId,
+          name: 'Book Google Calendar Slot',
+          type: 'ACTION',
+          config: { actionId: 'create_event', connector: 'GOOGLE_CALENDAR', summary: 'Customer Consultation', durationMinutes: 30 },
+          next: hasSheets || hasWhatsApp ? { DEFAULT: `node_${stepIdx}` } : undefined
+        });
+      }
+
+      if (hasSheets) {
+        const sheetNodeId = `node_${stepIdx++}`;
+        nodes.push({
+          id: sheetNodeId,
+          name: 'Log Record to Google Sheets',
+          type: 'ACTION',
+          config: { actionId: 'append_rows', connector: 'GOOGLE_SHEETS', range: 'A:E' },
+          next: hasWhatsApp ? { DEFAULT: `node_${stepIdx}` } : undefined
+        });
+      }
+
+      if (hasWhatsApp) {
+        const waNodeId = `node_${stepIdx++}`;
+        nodes.push({
+          id: waNodeId,
+          name: 'Send WhatsApp Notification',
+          type: 'ACTION',
+          config: { actionId: 'send_message', connector: 'WHATSAPP', recipient: '{{trigger.phone}}', message: 'Your request has been processed.' }
+        });
+      } else if (!hasCalendar && !hasSheets) {
+        const defaultActionId = `node_${stepIdx++}`;
+        nodes.push({
+          id: defaultActionId,
+          name: hasPayment ? 'Generate Payment Link' : 'Send Email Confirmation',
+          type: 'ACTION',
+          config: hasPayment 
+            ? { actionId: 'create_payment_link', connector: 'RAZORPAY', amount: 1000 }
+            : { actionId: 'send_email', connector: 'GMAIL', subject: 'Automated Response', to: '{{trigger.from}}' }
+        });
+      }
+
+      // Ensure last node has no next link
+      if (nodes.length > 0) {
+        delete nodes[nodes.length - 1].next;
+      }
+
+      generated = {
+        name: prompt.length > 40 ? prompt.substring(0, 37) + '...' : prompt,
         description: prompt,
-        category: 'CUSTOM',
-        businessId,
-        status: WorkflowStatus.DRAFT,
-        versions: {
-          create: {
-            versionNumber: 1,
-            definition,
-            trigger: {},
-            createdBy: user.id
+        category: hasPayment ? 'FINANCE' : hasQuote ? 'SALES' : hasCalendar ? 'OPERATIONS' : 'CUSTOMER SUPPORT',
+        trigger: { type: triggerEvent, config: { connector: triggerConnector, event: triggerEvent } },
+        requiredConnectors: Array.from(reqConnectors),
+        nodes
+      };
+    }
+
+    // Persist to database in a single atomic transaction
+    const workflow = await prisma.$transaction(async (tx) => {
+      const wf = await tx.workflow.create({
+        data: {
+          name: generated!.name,
+          description: generated!.description,
+          category: generated!.category,
+          businessId,
+          status: WorkflowStatus.ACTIVE,
+          config: {
+            generatedFromPrompt: prompt,
+            aiGeneratedAt: new Date().toISOString()
           }
         }
-      },
-      include: { versions: true }
+      });
+
+      // Normalize node types for engine compatibility
+      generated!.nodes = generated!.nodes.map((n, i) => {
+        let normalizedType = (n.type || 'ACTION').toUpperCase();
+        if (normalizedType.includes('ACTION')) normalizedType = 'ACTION';
+        else if (normalizedType.includes('TRIGGER')) normalizedType = 'TRIGGER';
+        else if (normalizedType.includes('AGENT') || normalizedType.includes('AI')) normalizedType = 'AI_AGENT';
+        else if (normalizedType.includes('SEARCH') || normalizedType.includes('RAG')) normalizedType = 'RAG_SEARCH';
+        else if (normalizedType.includes('CONDITION') || normalizedType.includes('BRANCH')) normalizedType = 'CONDITION';
+        else if (normalizedType.includes('APPROVAL')) normalizedType = 'APPROVAL';
+        return { ...n, id: n.id || `node_${i + 1}`, type: normalizedType };
+      });
+
+      const version = await tx.workflowVersion.create({
+        data: {
+          workflowId: wf.id,
+          versionNumber: 1,
+          status: 'ACTIVE',
+          trigger: generated!.trigger,
+          requiredConnectors: generated!.requiredConnectors || [],
+          definition: {
+            nodes: generated!.nodes,
+            failurePolicy: 'CONTINUE_ON_NON_CRITICAL'
+          },
+          createdBy: user.id
+        }
+      });
+
+      // Create WorkflowStep records for each node
+      for (let i = 0; i < generated!.nodes.length; i++) {
+        const node = generated!.nodes[i];
+        await tx.workflowStep.create({
+          data: {
+            workflowVersionId: version.id,
+            stepId: node.id,
+            name: node.name || node.id,
+            type: node.type,
+            stepOrder: i + 1,
+            config: node.config || {},
+            next: (node.next as any) || undefined
+          }
+        });
+      }
+
+      // Set activeVersionId
+      await tx.workflow.update({
+        where: { id: wf.id },
+        data: { activeVersionId: version.id }
+      });
+
+      return tx.workflow.findUnique({
+        where: { id: wf.id },
+        include: { versions: { include: { steps: true } } }
+      });
     });
 
-    await prisma.workflow.update({
-      where: { id: workflow.id },
-      data: { activeVersionId: workflow.versions[0].id }
+    res.json({
+      success: true,
+      data: {
+        workflowId: workflow?.id,
+        workflow
+      }
     });
-
-    res.json({ success: true, data: { workflowId: workflow.id } });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, error: 'Failed to generate workflow' });
+  } catch (error: any) {
+    console.error('[WorkflowGenerate Error]:', error);
+    res.status(500).json({ success: false, error: 'Failed to generate workflow: ' + error.message });
   }
 });
 

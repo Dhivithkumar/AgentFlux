@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useOutletContext } from 'react-router-dom';
-import { apiCall } from '../../lib/api';
+import { apiCall, API_URL } from '../../lib/api';
 import { useToast } from '../../components/ui/Toast';
 import { formatCurrency } from '../../lib/currency';
 import {
@@ -93,7 +93,6 @@ export default function FinanceCenter() {
     setExporting(key);
     try {
       const token = localStorage.getItem('token');
-      const API_URL = ((import.meta) as any).env.NEXT_PUBLIC_API_URL || '/api';
       const url = `${API_URL}/businesses/${businessId}/finance/export/${reportType}?format=${format}${extraParams ? `&${extraParams}` : ''}`;
       
       const response = await fetch(url, {

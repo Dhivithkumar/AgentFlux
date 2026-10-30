@@ -33,3 +33,4 @@ export class TrelloConnectorProvider implements ConnectorProvider {
     return ['trello.createCard', 'trello.moveCard'];
   }
 }
+

@@ -6,6 +6,7 @@ import {
   Plus, GitBranch, Save, RefreshCw, X, Check, Clock, AlertCircle
 } from 'lucide-react';
 import { WorkflowCanvas } from './WorkflowCanvas';
+import { API_URL } from '../../lib/api';
 
 interface ReadinessCheck {
   name: string;
@@ -77,22 +78,22 @@ export function WorkflowBuilder() {
   const fetchData = async () => {
     try {
       const [wfRes, readyRes, execRes, versRes, intRes, regRes] = await Promise.all([
-        fetch(`/api/workflows/${id}?businessId=${businessId}`, {
+        fetch(`${API_URL}/workflows/${id}?businessId=${businessId}`, {
           headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
         }).then(r => r.text()).then(t => t ? JSON.parse(t) : null),
-        fetch(`/api/workflows/${id}/readiness?businessId=${businessId}`, {
+        fetch(`${API_URL}/workflows/${id}/readiness?businessId=${businessId}`, {
           headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
         }).then(r => r.text()).then(t => t ? JSON.parse(t) : null),
-        fetch(`/api/workflows/${id}/executions?businessId=${businessId}`, {
+        fetch(`${API_URL}/workflows/${id}/executions?businessId=${businessId}`, {
           headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
         }).then(r => r.text()).then(t => t ? JSON.parse(t) : null),
-        fetch(`/api/workflows/${id}/versions?businessId=${businessId}`, {
+        fetch(`${API_URL}/workflows/${id}/versions?businessId=${businessId}`, {
           headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
         }).then(r => r.text()).then(t => t ? JSON.parse(t) : null),
-        fetch(`/api/integrations?businessId=${businessId}`, {
+        fetch(`${API_URL}/integrations?businessId=${businessId}`, {
           headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
         }).then(r => r.text()).then(t => t ? JSON.parse(t) : null),
-        fetch(`/api/integrations/registry`, {
+        fetch(`${API_URL}/integrations/registry`, {
           headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
         }).then(r => r.text()).then(t => t ? JSON.parse(t) : null)
       ]);
@@ -113,7 +114,7 @@ export function WorkflowBuilder() {
   const handleSaveDraft = async () => {
     setSavingDraft(true);
     try {
-      const res = await fetch(`/api/workflows/${id}/definition`, {
+      const res = await fetch(`${API_URL}/workflows/${id}/definition`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('token')}` },
         body: JSON.stringify({
@@ -139,7 +140,7 @@ export function WorkflowBuilder() {
     if (!confirm('Publishing will compile this DAG into a new immutable version and activate it. Proceed?')) return;
     setPublishing(true);
     try {
-      const res = await fetch(`/api/workflows/${id}/publish`, {
+      const res = await fetch(`${API_URL}/workflows/${id}/publish`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('token')}` },
         body: JSON.stringify({
@@ -163,7 +164,7 @@ export function WorkflowBuilder() {
   const handleRollback = async (versionId: string) => {
     if (!confirm(`Are you sure you want to rollback active execution to version ID ${versionId}?`)) return;
     try {
-      const res = await fetch(`/api/workflows/${id}/rollback`, {
+      const res = await fetch(`${API_URL}/workflows/${id}/rollback`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('token')}` },
         body: JSON.stringify({ businessId, versionId })
@@ -188,7 +189,7 @@ export function WorkflowBuilder() {
       let payload = {};
       try { payload = JSON.parse(payloadStr || '{}'); } catch(e) {}
 
-      const res = await fetch(`/api/workflows/${id}/trigger`, {
+      const res = await fetch(`${API_URL}/workflows/${id}/trigger`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -215,7 +216,7 @@ export function WorkflowBuilder() {
     if (reason === null) return;
 
     try {
-      const res = await fetch(`/api/workflows/executions/${execId}/cancel`, {
+      const res = await fetch(`${API_URL}/workflows/executions/${execId}/cancel`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('token')}` },
         body: JSON.stringify({ reason })
@@ -235,7 +236,7 @@ export function WorkflowBuilder() {
 
   const handleRetryExecution = async (execId: string, fromStepId?: string) => {
     try {
-      const res = await fetch(`/api/workflows/executions/${execId}/retry`, {
+      const res = await fetch(`${API_URL}/workflows/executions/${execId}/retry`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('token')}` },
         body: JSON.stringify({ fromStepId, sync: true })
@@ -256,7 +257,7 @@ export function WorkflowBuilder() {
   const viewExecutionDetails = async (execId: string) => {
     setLoadingExecutionDetails(true);
     try {
-      const res = await fetch(`/api/workflows/executions/${execId}`, {
+      const res = await fetch(`${API_URL}/workflows/executions/${execId}`, {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
       }).then(r => r.text()).then(t => t ? JSON.parse(t) : null);
 

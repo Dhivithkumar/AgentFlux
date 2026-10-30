@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useParams, Link, useOutletContext } from 'react-router-dom';
-import { apiCall } from '../../lib/api';
+import { apiCall, API_URL } from '../../lib/api';
 import { ArrowLeft, Upload, Trash2, RefreshCw, Search, FileText, Database } from 'lucide-react';
 
 export default function KnowledgeBaseDetails() {
@@ -65,7 +65,7 @@ export default function KnowledgeBaseDetails() {
         formData.append('file', file);
         formData.append('knowledgeType', knowledgeType);
 
-        return fetch(`http://localhost:3001/api/knowledge/${id}/documents?businessId=${business.id}`, {
+        return fetch(`${API_URL}/knowledge/${id}/documents?businessId=${business.id}`, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${localStorage.getItem('token')}`

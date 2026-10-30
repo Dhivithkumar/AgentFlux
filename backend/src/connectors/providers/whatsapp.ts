@@ -58,3 +58,4 @@ export class WhatsAppConnectorProvider implements ConnectorProvider {
     return ['whatsapp.sendMessage', 'whatsapp.sendTemplate'];
   }
 }
+

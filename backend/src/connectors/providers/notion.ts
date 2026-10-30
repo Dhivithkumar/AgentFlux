@@ -60,3 +60,4 @@ export class NotionConnectorProvider implements ConnectorProvider {
     return ['notion.createPage', 'notion.queryDatabase'];
   }
 }
+

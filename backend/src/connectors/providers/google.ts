@@ -4,13 +4,22 @@ import { ConnectorProvider, ConnectorAccountInfo, OAuthTokenResult } from '../ty
 export function resolveGoogleRedirectUri(): string {
   const envUri = process.env.GOOGLE_REDIRECT_URI;
   if (envUri && envUri.trim().length > 0 && !envUri.includes('localhost:3001')) {
-    return envUri.trim();
+    let uri = envUri.trim();
+    // Enforce https if pointing to a non-localhost domain (Google OAuth policy strictly blocks http on public domains)
+    if (uri.startsWith('http://') && !uri.includes('localhost') && !uri.includes('127.0.0.1')) {
+      uri = uri.replace(/^http:\/\//, 'https://');
+    }
+    return uri;
   }
   if (process.env.RENDER_EXTERNAL_URL) {
     const base = process.env.RENDER_EXTERNAL_URL.startsWith('http')
       ? process.env.RENDER_EXTERNAL_URL
       : `https://${process.env.RENDER_EXTERNAL_URL}`;
     return `${base.replace(/\/+$/, '')}/api/integrations/gmail/callback`;
+  }
+  // If deployed in production (Render), default to authoritative HTTPS callback URL
+  if (process.env.NODE_ENV === 'production' || process.env.RENDER === 'true') {
+    return 'https://agentflux-backend.onrender.com/api/integrations/gmail/callback';
   }
   return envUri || 'http://localhost:3001/api/integrations/gmail/callback';
 }
