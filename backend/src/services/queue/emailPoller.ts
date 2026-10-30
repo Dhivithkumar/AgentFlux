@@ -58,19 +58,34 @@ export class EmailPoller {
     try {
       // Find GMAIL integration for this business
       const integration = await prisma.integration.findFirst({
-        where: { businessId: workflow.businessId, provider: 'GMAIL', status: 'CONNECTED' },
+        where: { businessId: workflow.businessId, provider: 'GMAIL' },
         include: { credential: true }
       });
 
-      if (!integration || !integration.credential) return; // No integration found
+      if (!integration) {
+        return; // No GMAIL integration configured for this business
+      }
+
+      if (integration.status !== 'CONNECTED') {
+        console.warn(`[EmailPoller] Skipping workflow "${workflow.name}" (${workflow.id}): Gmail integration is in status "${integration.status}". Please reconnect in Integrations.`);
+        return;
+      }
+
+      if (!integration.credential) {
+        console.warn(`[EmailPoller] Skipping workflow "${workflow.name}": Gmail integration exists but has no credentials stored.`);
+        return;
+      }
 
       // Auto-refresh token if needed
       let accessToken = decrypt(integration.credential.accessTokenEncrypted);
-      if (integration.credential.expiresAt && new Date(integration.credential.expiresAt).getTime() < Date.now() + 5 * 60 * 1000) {
+      const isExpired = !integration.credential.expiresAt || new Date(integration.credential.expiresAt).getTime() < Date.now() + 5 * 60 * 1000;
+      
+      if (isExpired) {
         if (integration.credential.refreshTokenEncrypted) {
           const refreshToken = decrypt(integration.credential.refreshTokenEncrypted);
           const providerImpl = getConnectorProvider('GMAIL');
           try {
+            console.log(`[EmailPoller] Access token expired or expiring soon for business ${workflow.businessId}. Refreshing...`);
             const newTokens = await providerImpl.refreshAccessToken(refreshToken);
             accessToken = newTokens.accessToken;
             await prisma.integrationCredential.update({
@@ -81,9 +96,9 @@ export class EmailPoller {
                 ...(newTokens.refreshToken ? { refreshTokenEncrypted: encrypt(newTokens.refreshToken) } : {})
               }
             });
-            console.log('Successfully refreshed GMAIL access token for background poller');
+            console.log(`[EmailPoller] Successfully refreshed and saved GMAIL access token for business ${workflow.businessId}`);
           } catch (refreshErr: any) {
-            console.error("GMAIL Token refresh failed:", refreshErr);
+            console.error(`[EmailPoller] GMAIL Token refresh failed for business ${workflow.businessId}:`, refreshErr.message);
             
             // If the grant is completely invalid/revoked, stop polling it
             if (refreshErr.message === 'invalid_grant' || refreshErr?.response?.data?.error === 'invalid_grant') {
@@ -91,13 +106,14 @@ export class EmailPoller {
                 where: { id: integration.id },
                 data: { status: 'RECONNECT_REQUIRED' }
               });
-              console.log(`Integration ${integration.id} marked as RECONNECT_REQUIRED due to invalid_grant.`);
+              console.log(`[EmailPoller] Integration ${integration.id} marked as RECONNECT_REQUIRED due to invalid_grant.`);
             }
             
             return; // Can't proceed if token is expired and refresh fails
           }
         } else {
-           return; // Expired and no refresh token
+          console.warn(`[EmailPoller] Access token expired and no refresh token available for business ${workflow.businessId}`);
+          return;
         }
       }
 

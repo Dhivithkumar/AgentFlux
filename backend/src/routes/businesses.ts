@@ -11,7 +11,19 @@ router.get('/', async (req: AuthRequest, res) => {
   try {
     const memberships = await prisma.membership.findMany({
       where: { userId: req.user!.id },
-      include: { business: true }
+      include: {
+        business: {
+          include: {
+            integrations: {
+              select: {
+                provider: true,
+                status: true,
+                accountEmail: true
+              }
+            }
+          }
+        }
+      }
     });
     
     const businesses = memberships.map((m: any) => m.business);

@@ -47,6 +47,7 @@ app.use('/auth', authRoutes);
 app.use('/api/businesses', businessRoutes);
 app.use('/businesses', businessRoutes);
 app.use('/api/integrations', integrationRoutes);
+app.use('/integrations', integrationRoutes);
 app.use('/api/workflows', workflowRoutes);
 app.use('/api/workflow-templates', workflowTemplateRoutes);
 app.use('/api/knowledge', knowledgeRoutes);

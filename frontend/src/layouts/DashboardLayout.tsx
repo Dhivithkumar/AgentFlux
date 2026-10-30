@@ -33,7 +33,9 @@ export default function DashboardLayout() {
         if (stored && businesses.find((b: any) => b.id === stored)) {
           setActiveBusinessId(stored);
         } else {
-          setActiveBusinessId(businesses[0].id);
+          const preferred = businesses.find((b: any) => b.integrations && b.integrations.some((i: any) => i.status === 'CONNECTED')) || businesses[0];
+          setActiveBusinessId(preferred.id);
+          localStorage.setItem('activeBusinessId', preferred.id);
         }
       }
     });
@@ -162,7 +164,14 @@ export default function DashboardLayout() {
                       onClick={() => handleSwitchBusiness(b.id)}
                       className="w-full text-left px-4 py-2.5 text-sm hover:bg-slate-50 flex items-center justify-between transition-colors"
                     >
-                      <span className={`font-medium ${activeBusinessId === b.id ? 'text-primary-600' : 'text-slate-700'}`}>{b.name}</span>
+                      <div className="flex flex-col">
+                        <span className={`font-medium ${activeBusinessId === b.id ? 'text-primary-600' : 'text-slate-700'}`}>{b.name}</span>
+                        <span className="text-[11px] text-slate-400">
+                          {b.integrations && b.integrations.filter((i: any) => i.status === 'CONNECTED').length > 0
+                            ? `${b.integrations.filter((i: any) => i.status === 'CONNECTED').length} app(s) connected`
+                            : `ID: ${b.id.slice(0, 8)}`}
+                        </span>
+                      </div>
                       {activeBusinessId === b.id && <CheckCircle size={14} className="text-primary-600" />}
                     </button>
                   ))}

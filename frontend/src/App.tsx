@@ -71,6 +71,10 @@ function App() {
             <Route path="settings" element={<Settings />} />
           </Route>
           <Route path="/api/auth/callback/:provider" element={<OAuthCallback />} />
+          <Route path="/oauth/callback" element={<OAuthCallback />} />
+          <Route path="/oauth/callback/:provider" element={<OAuthCallback />} />
+          <Route path="/auth/callback/:provider" element={<OAuthCallback />} />
+          <Route path="/callback" element={<OAuthCallback />} />
         </Route>
       </Routes>
     </BrowserRouter>

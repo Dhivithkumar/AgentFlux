@@ -7,17 +7,35 @@ import { EventBus } from '../eventBus';
 import { connection as redis } from '../queue/connection';
 import { aiManager } from '../ai';
 
+const processedEmailCache = new Set<string>();
+
 export class ConversationOrchestrator {
   public static async processIncomingMessage(businessId: string, emailPayload: any, integrationId?: string) {
     const messageId = emailPayload.id;
 
-    // STEP 1 - IDEMPOTENCY
-    const isNew = await redis.setnx(`processed_email:${messageId}`, "1");
-    if (!isNew) {
+    // STEP 1 - IDEMPOTENCY (Redis with resilient in-memory fallback)
+    try {
+      const isNew = await Promise.race([
+        redis.setnx(`processed_email:${messageId}`, "1"),
+        new Promise<number>((_, reject) => setTimeout(() => reject(new Error('Redis timeout')), 2500))
+      ]);
+      if (!isNew) {
         console.log(`[ConversationOrchestrator] Idempotency hit: Email ${messageId} already processed. STOP.`);
         return;
+      }
+      redis.expire(`processed_email:${messageId}`, 7 * 24 * 60 * 60).catch(() => {});
+    } catch (redisErr: any) {
+      console.warn(`[ConversationOrchestrator] Redis idempotency unavailable (${redisErr?.message || 'error'}), using in-memory fallback.`);
+      if (processedEmailCache.has(messageId)) {
+        console.log(`[ConversationOrchestrator] In-memory idempotency hit: Email ${messageId} already processed. STOP.`);
+        return;
+      }
+      processedEmailCache.add(messageId);
+      if (processedEmailCache.size > 5000) {
+        const first = processedEmailCache.values().next().value;
+        if (first) processedEmailCache.delete(first);
+      }
     }
-    await redis.expire(`processed_email:${messageId}`, 7 * 24 * 60 * 60);
 
     let currentState = 'RECEIVED';
     console.log(`[ConversationOrchestrator] State: ${currentState} for ${messageId}`);

@@ -172,8 +172,19 @@ router.get('/:provider/connect', authenticate, async (req: Request, res: Respons
     // Generate secure state
     const state = crypto.randomBytes(32).toString('hex');
     const stateHash = crypto.createHash('sha256').update(state).digest('hex');
+
+    // Detect calling frontend origin so callback can return user to the exact same frontend
+    const reqOrigin = req.headers.origin || (req.headers.referer ? new URL(req.headers.referer as string).origin : null);
+    const frontendOrigin = reqOrigin || process.env.FRONTEND_URL || 'http://localhost:5173';
     
-    // Store context in DB
+    // Store context in memory map and in DB
+    oauthStates.set(stateHash, {
+      userId: user.id,
+      businessId,
+      provider,
+      frontendOrigin
+    });
+    
     await prisma.oAuthState.create({
       data: {
         userId: user.id,
@@ -194,133 +205,178 @@ router.get('/:provider/connect', authenticate, async (req: Request, res: Respons
   }
 });
 
-// OAuth Callback
-// Note: This endpoint is usually hit by the browser redirect directly or the frontend can proxy it.
-// We'll design it to be called by the frontend which receives the code and state.
-// OAuth Callback (Direct from Google)
-router.get('/:provider/callback', async (req: Request, res: Response) => {
-  const provider = req.params.provider;
-  const code = req.query.code as string;
-  const state = req.query.state as string;
-  const error = req.query.error as string;
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-
-  if (error) {
-    return res.redirect(frontendUrl + '/dashboard/integrations?error=' + encodeURIComponent(error));
-  }
-
-  if (!code || !state) {
-    return res.redirect(frontendUrl + '/dashboard/integrations?error=missing_params');
-  }
-
+// Shared helper to handle OAuth token exchange & integration storage
+async function processOAuthTokenExchange(code: string, state: string) {
   const stateHash = crypto.createHash('sha256').update(state).digest('hex');
   const context = await prisma.oAuthState.findUnique({
     where: { stateHash }
   });
 
+  const cached = oauthStates.get(stateHash);
+
   if (!context || context.expiresAt < new Date()) {
-    return res.redirect(frontendUrl + '/dashboard/integrations?error=invalid_state');
+    throw new Error('Invalid or expired OAuth state');
   }
 
   // Clear state to prevent reuse
-  await prisma.oAuthState.delete({ where: { id: context.id } });
+  await prisma.oAuthState.delete({ where: { id: context.id } }).catch(() => {});
+  oauthStates.delete(stateHash);
 
-  try {
-    const providerImpl = getConnectorProvider(context.provider);
-    const tokens = await providerImpl.handleOAuthCallback(code);
-    
-    const accountInfo = await providerImpl.getAccountInfo(tokens.accessToken);
+  const providerImpl = getConnectorProvider(context.provider);
+  const tokens = await providerImpl.handleOAuthCallback(code);
+  const accountInfo = await providerImpl.getAccountInfo(tokens.accessToken);
 
-    // Create or Update Integration
-    const integration = await prisma.$transaction(async (tx: any) => {
-      const existing = await tx.integration.findUnique({
-        where: {
-          businessId_provider_accountId: {
-            businessId: context.businessId,
-            provider: context.provider,
-            accountId: accountInfo.accountId
-          }
+  // Create or Update Integration
+  const integration = await prisma.$transaction(async (tx: any) => {
+    const existing = await tx.integration.findUnique({
+      where: {
+        businessId_provider_accountId: {
+          businessId: context.businessId,
+          provider: context.provider,
+          accountId: accountInfo.accountId
+        }
+      }
+    });
+
+    let intId = '';
+
+    if (existing) {
+      intId = existing.id;
+      await tx.integration.update({
+        where: { id: existing.id },
+        data: {
+          accountEmail: accountInfo.accountEmail,
+          displayName: accountInfo.displayName,
+          status: IntegrationStatus.CONNECTED,
+          scopes: context.scopes,
+          metadata: accountInfo.metadata,
+          lastConnectedAt: new Date(),
+          lastVerifiedAt: new Date()
         }
       });
 
-      let intId = '';
-
-      if (existing) {
-        intId = existing.id;
-        await tx.integration.update({
-          where: { id: existing.id },
-          data: {
-            accountEmail: accountInfo.accountEmail,
-            displayName: accountInfo.displayName,
-            status: IntegrationStatus.CONNECTED,
-            scopes: context.scopes,
-            metadata: accountInfo.metadata,
-            lastConnectedAt: new Date(),
-            lastVerifiedAt: new Date()
-          }
-        });
-
-        await tx.integrationCredential.upsert({
-          where: { integrationId: existing.id },
-          create: {
-            integrationId: existing.id,
-            accessTokenEncrypted: encrypt(tokens.accessToken),
-            refreshTokenEncrypted: tokens.refreshToken ? encrypt(tokens.refreshToken) : undefined,
-            expiresAt: tokens.expiresIn ? new Date(Date.now() + tokens.expiresIn * 1000) : null,
-            tokenType: tokens.tokenType || 'Bearer'
-          },
-          update: {
-            accessTokenEncrypted: encrypt(tokens.accessToken),
-            refreshTokenEncrypted: tokens.refreshToken ? encrypt(tokens.refreshToken) : undefined,
-            expiresAt: tokens.expiresIn ? new Date(Date.now() + tokens.expiresIn * 1000) : null,
-            tokenType: tokens.tokenType
-          }
-        });
-      } else {
-        // Create new
-        const newInt = await tx.integration.create({
-          data: {
-            businessId: context.businessId,
-            provider: context.provider,
-            accountId: accountInfo.accountId,
-            accountEmail: accountInfo.accountEmail,
-            displayName: accountInfo.displayName,
-            status: IntegrationStatus.CONNECTED,
-            scopes: context.scopes,
-            metadata: accountInfo.metadata,
-            lastConnectedAt: new Date(),
-            lastVerifiedAt: new Date(),
-            credential: {
-              create: {
-                accessTokenEncrypted: encrypt(tokens.accessToken),
-                refreshTokenEncrypted: tokens.refreshToken ? encrypt(tokens.refreshToken) : null,
-                expiresAt: tokens.expiresIn ? new Date(Date.now() + tokens.expiresIn * 1000) : null,
-                tokenType: tokens.tokenType
-              }
-            }
-          }
-        });
-        intId = newInt.id;
-      }
-
-      await tx.auditLog.create({
+      await tx.integrationCredential.upsert({
+        where: { integrationId: existing.id },
+        create: {
+          integrationId: existing.id,
+          accessTokenEncrypted: encrypt(tokens.accessToken),
+          refreshTokenEncrypted: tokens.refreshToken ? encrypt(tokens.refreshToken) : undefined,
+          expiresAt: tokens.expiresIn ? new Date(Date.now() + tokens.expiresIn * 1000) : null,
+          tokenType: tokens.tokenType || 'Bearer'
+        },
+        update: {
+          accessTokenEncrypted: encrypt(tokens.accessToken),
+          refreshTokenEncrypted: tokens.refreshToken ? encrypt(tokens.refreshToken) : undefined,
+          expiresAt: tokens.expiresIn ? new Date(Date.now() + tokens.expiresIn * 1000) : null,
+          tokenType: tokens.tokenType
+        }
+      });
+    } else {
+      const newInt = await tx.integration.create({
         data: {
           businessId: context.businessId,
-          userId: context.userId,
-          integrationId: intId,
-          eventType: existing ? 'CONNECTOR_RECONNECTED' : 'CONNECTOR_CONNECTED'
+          provider: context.provider,
+          accountId: accountInfo.accountId,
+          accountEmail: accountInfo.accountEmail,
+          displayName: accountInfo.displayName,
+          status: IntegrationStatus.CONNECTED,
+          scopes: context.scopes,
+          metadata: accountInfo.metadata,
+          lastConnectedAt: new Date(),
+          lastVerifiedAt: new Date(),
+          credential: {
+            create: {
+              accessTokenEncrypted: encrypt(tokens.accessToken),
+              refreshTokenEncrypted: tokens.refreshToken ? encrypt(tokens.refreshToken) : null,
+              expiresAt: tokens.expiresIn ? new Date(Date.now() + tokens.expiresIn * 1000) : null,
+              tokenType: tokens.tokenType
+            }
+          }
         }
       });
+      intId = newInt.id;
+    }
 
-      return tx.integration.findUnique({ where: { id: intId } });
-    }, { timeout: 15000 });
+    await tx.auditLog.create({
+      data: {
+        businessId: context.businessId,
+        userId: context.userId,
+        integrationId: intId,
+        eventType: existing ? 'CONNECTOR_RECONNECTED' : 'CONNECTOR_CONNECTED'
+      }
+    });
 
-    return res.redirect(frontendUrl + '/dashboard/integrations?connected=' + encodeURIComponent(provider.toLowerCase()));
-  } catch (err: any) {
-    console.error('Callback Error:', err);
-    return res.redirect(frontendUrl + '/dashboard/integrations?error=gmail_connection_failed');
+    return tx.integration.findUnique({ where: { id: intId } });
+  }, { timeout: 15000 });
+
+  return {
+    integration,
+    provider: context.provider,
+    businessId: context.businessId,
+    frontendOrigin: cached?.frontendOrigin || process.env.FRONTEND_URL || 'http://localhost:5173'
+  };
+}
+
+// OAuth Callback handler for browser GET redirects
+async function handleOAuthGetCallback(req: Request, res: Response) {
+  const code = req.query.code as string;
+  const state = req.query.state as string;
+  const error = req.query.error as string;
+  const stateHash = state ? crypto.createHash('sha256').update(state).digest('hex') : '';
+  const cached = stateHash ? oauthStates.get(stateHash) : null;
+  const defaultFrontend = (cached?.frontendOrigin || process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/+$/, '');
+
+  if (error) {
+    return res.redirect(`${defaultFrontend}/dashboard/integrations?error=${encodeURIComponent(error)}`);
   }
-});
+
+  if (!code || !state) {
+    return res.redirect(`${defaultFrontend}/dashboard/integrations?error=missing_params`);
+  }
+
+  try {
+    const result = await processOAuthTokenExchange(code, state);
+    const targetOrigin = (result.frontendOrigin || defaultFrontend).replace(/\/+$/, '');
+    return res.redirect(`${targetOrigin}/dashboard/integrations?connected=${encodeURIComponent(result.provider.toLowerCase())}`);
+  } catch (err: any) {
+    console.error('OAuth GET Callback Error:', err);
+    return res.redirect(`${defaultFrontend}/dashboard/integrations?error=${encodeURIComponent(err.message || 'connection_failed')}`);
+  }
+}
+
+// OAuth Callback handler for frontend POST requests (OAuthCallback component)
+async function handleOAuthPostCallback(req: Request, res: Response) {
+  const { code, state, error } = req.body;
+
+  if (error) {
+    return res.status(400).json({ success: false, error: `Provider error: ${error}` });
+  }
+
+  if (!code || !state) {
+    return res.status(400).json({ success: false, error: 'Missing code or state in callback payload' });
+  }
+
+  try {
+    const result = await processOAuthTokenExchange(code, state);
+    return res.json({
+      success: true,
+      data: {
+        integrationId: result.integration?.id,
+        provider: result.provider,
+        businessId: result.businessId
+      }
+    });
+  } catch (err: any) {
+    console.error('OAuth POST Callback Error:', err);
+    return res.status(400).json({ success: false, error: err.message || 'OAuth token exchange failed' });
+  }
+}
+
+// Register both direct browser redirects (GET) and frontend API callbacks (POST)
+router.get('/callback', handleOAuthGetCallback);
+router.get('/:provider/callback', handleOAuthGetCallback);
+router.post('/callback', handleOAuthPostCallback);
+router.post('/:provider/callback', handleOAuthPostCallback);
 
 // Verify connection
 

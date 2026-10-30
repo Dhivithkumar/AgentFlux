@@ -1,6 +1,20 @@
 import { google } from 'googleapis';
 import { ConnectorProvider, ConnectorAccountInfo, OAuthTokenResult } from '../types';
 
+export function resolveGoogleRedirectUri(): string {
+  const envUri = process.env.GOOGLE_REDIRECT_URI;
+  if (envUri && envUri.trim().length > 0 && !envUri.includes('localhost:3001')) {
+    return envUri.trim();
+  }
+  if (process.env.RENDER_EXTERNAL_URL) {
+    const base = process.env.RENDER_EXTERNAL_URL.startsWith('http')
+      ? process.env.RENDER_EXTERNAL_URL
+      : `https://${process.env.RENDER_EXTERNAL_URL}`;
+    return `${base.replace(/\/+$/, '')}/api/integrations/gmail/callback`;
+  }
+  return envUri || 'http://localhost:3001/api/integrations/gmail/callback';
+}
+
 export class GoogleConnectorProvider implements ConnectorProvider {
   providerId: string;
   private oauth2Client: any;
@@ -10,10 +24,10 @@ export class GoogleConnectorProvider implements ConnectorProvider {
     
     const clientId = process.env.GOOGLE_CLIENT_ID;
     const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-    const redirectUri = process.env.GOOGLE_REDIRECT_URI;
+    const redirectUri = resolveGoogleRedirectUri();
 
-    if (!clientId || !clientSecret || !redirectUri) {
-      console.warn('Google OAuth credentials are not set in environment.');
+    if (!clientId || !clientSecret) {
+      console.warn('Google OAuth credentials (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET) are not set in environment.');
     }
 
     this.oauth2Client = new google.auth.OAuth2(
@@ -24,6 +38,12 @@ export class GoogleConnectorProvider implements ConnectorProvider {
   }
 
   getAuthorizationUrl(state: string, scopes: string[]): string {
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    const redirectUri = resolveGoogleRedirectUri();
+    
+    this.oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
+
     return this.oauth2Client.generateAuthUrl({
       access_type: 'offline', // Request refresh token
       prompt: 'consent', // Force consent screen to always get a refresh token
@@ -33,6 +53,11 @@ export class GoogleConnectorProvider implements ConnectorProvider {
   }
 
   async handleOAuthCallback(code: string): Promise<OAuthTokenResult> {
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    const redirectUri = resolveGoogleRedirectUri();
+    
+    this.oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
     const { tokens } = await this.oauth2Client.getToken(code);
     
     return {
@@ -45,6 +70,11 @@ export class GoogleConnectorProvider implements ConnectorProvider {
   }
 
   async refreshAccessToken(refreshToken: string): Promise<OAuthTokenResult> {
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    const redirectUri = resolveGoogleRedirectUri();
+    
+    this.oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
     this.oauth2Client.setCredentials({
       refresh_token: refreshToken
     });
