@@ -1,9 +1,20 @@
 import { ConnectorDefinition, ConnectorProvider } from './types';
 import { GoogleConnectorProvider } from './providers/google';
+import { WhatsAppConnectorProvider } from './providers/whatsapp';
+import { RazorpayConnectorProvider } from './providers/razorpay';
+import { StripeConnectorProvider } from './providers/stripe';
+import { NotionConnectorProvider } from './providers/notion';
+import { TrelloConnectorProvider } from './providers/trello';
+
 import { gmailActions, gmailTriggers } from './actions/gmail';
 import { googleCalendarActions } from './actions/googleCalendar';
 import { googleDriveActions } from './actions/googleDrive';
 import { googleSheetsActions } from './actions/googleSheets';
+import { whatsappActions, whatsappTriggers } from './actions/whatsapp';
+import { razorpayActions } from './actions/razorpay';
+import { stripeActions } from './actions/stripe';
+import { notionActions } from './actions/notion';
+import { trelloActions } from './actions/trello';
 
 export const CONNECTORS: ConnectorDefinition[] = [
   // COMMUNICATION
@@ -11,12 +22,12 @@ export const CONNECTORS: ConnectorDefinition[] = [
   { id: 'SLACK', name: 'Slack', category: 'COMMUNICATION', description: 'Team messaging and notifications', logo: 'https://upload.wikimedia.org/wikipedia/commons/d/d5/Slack_icon_2019.svg', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
   { id: 'MS_TEAMS', name: 'Microsoft Teams', category: 'COMMUNICATION', description: 'Enterprise communication', logo: 'https://upload.wikimedia.org/wikipedia/commons/c/c9/Microsoft_Office_Teams_%282018%E2%80%93present%29.svg', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
   { id: 'OUTLOOK', name: 'Outlook', category: 'COMMUNICATION', description: 'Microsoft email', logo: 'https://upload.wikimedia.org/wikipedia/commons/d/df/Microsoft_Office_Outlook_%282018%E2%80%93present%29.svg', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
-  { id: 'WHATSAPP', name: 'WhatsApp Business', category: 'COMMUNICATION', description: 'Customer messaging', logo: 'https://upload.wikimedia.org/wikipedia/commons/6/6b/WhatsApp.svg', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
+  { id: 'WHATSAPP', name: 'WhatsApp Business', category: 'COMMUNICATION', description: 'Customer messaging via Meta Cloud API', logo: 'https://upload.wikimedia.org/wikipedia/commons/6/6b/WhatsApp.svg', defaultScopes: [], status: 'available', capabilities: ['whatsapp.sendMessage', 'whatsapp.sendTemplate'], actions: whatsappActions, triggers: whatsappTriggers },
 
   // PRODUCTIVITY
   { id: 'GOOGLE_CALENDAR', name: 'Google Calendar', category: 'PRODUCTIVITY', description: 'Scheduling and meetings', logo: 'https://upload.wikimedia.org/wikipedia/commons/a/a5/Google_Calendar_icon_%282020%29.svg', defaultScopes: ['https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile', 'https://www.googleapis.com/auth/calendar'], status: 'available', capabilities: ['CALENDAR.LIST_EVENTS', 'CALENDAR.CREATE_EVENT', 'CALENDAR.CHECK_AVAILABILITY'], actions: googleCalendarActions, triggers: [] },
-  { id: 'NOTION', name: 'Notion', category: 'PRODUCTIVITY', description: 'Workspace and docs', logo: 'https://upload.wikimedia.org/wikipedia/commons/4/45/Notion_app_logo.png', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
-  { id: 'TRELLO', name: 'Trello', category: 'PRODUCTIVITY', description: 'Project management', logo: 'https://upload.wikimedia.org/wikipedia/en/8/8c/Trello_logo.svg', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
+  { id: 'NOTION', name: 'Notion', category: 'PRODUCTIVITY', description: 'Workspace docs and database items', logo: 'https://upload.wikimedia.org/wikipedia/commons/4/45/Notion_app_logo.png', defaultScopes: [], status: 'available', capabilities: ['notion.createPage', 'notion.queryDatabase'], actions: notionActions, triggers: [] },
+  { id: 'TRELLO', name: 'Trello', category: 'PRODUCTIVITY', description: 'Project cards and boards management', logo: 'https://upload.wikimedia.org/wikipedia/en/8/8c/Trello_logo.svg', defaultScopes: [], status: 'available', capabilities: ['trello.createCard', 'trello.moveCard'], actions: trelloActions, triggers: [] },
   { id: 'ASANA', name: 'Asana', category: 'PRODUCTIVITY', description: 'Task tracking', logo: 'https://upload.wikimedia.org/wikipedia/commons/3/3b/Asana_logo.svg', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
   { id: 'CLICKUP', name: 'ClickUp', category: 'PRODUCTIVITY', description: 'All-in-one productivity', logo: 'https://upload.wikimedia.org/wikipedia/commons/4/4c/Clickup_logo.png', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
 
@@ -37,8 +48,8 @@ export const CONNECTORS: ConnectorDefinition[] = [
   { id: 'WOOCOMMERCE', name: 'WooCommerce', category: 'E-COMMERCE', description: 'WordPress e-commerce', logo: 'https://upload.wikimedia.org/wikipedia/commons/2/2a/WooCommerce_logo.svg', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
 
   // PAYMENTS
-  { id: 'STRIPE', name: 'Stripe', category: 'PAYMENTS', description: 'Payment processing', logo: 'https://upload.wikimedia.org/wikipedia/commons/b/ba/Stripe_Logo%2C_revised_2016.svg', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
-  { id: 'RAZORPAY', name: 'Razorpay', category: 'PAYMENTS', description: 'India payments', logo: 'https://upload.wikimedia.org/wikipedia/commons/8/89/Razorpay_logo.svg', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
+  { id: 'STRIPE', name: 'Stripe', category: 'PAYMENTS', description: 'Payment processing & hosted checkout', logo: 'https://upload.wikimedia.org/wikipedia/commons/b/ba/Stripe_Logo%2C_revised_2016.svg', defaultScopes: [], status: 'available', capabilities: ['stripe.createCheckoutSession', 'stripe.createPaymentLink'], actions: stripeActions, triggers: [] },
+  { id: 'RAZORPAY', name: 'Razorpay', category: 'PAYMENTS', description: 'India payments & UPI payment links', logo: 'https://upload.wikimedia.org/wikipedia/commons/8/89/Razorpay_logo.svg', defaultScopes: [], status: 'available', capabilities: ['razorpay.createPaymentLink', 'razorpay.verifyPayment'], actions: razorpayActions, triggers: [] },
   { id: 'PAYPAL', name: 'PayPal', category: 'PAYMENTS', description: 'Global payments', logo: 'https://upload.wikimedia.org/wikipedia/commons/b/b5/PayPal.svg', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
 
   // STORAGE / DATA
@@ -91,9 +102,35 @@ export function getConnectorProvider(id: string): ConnectorProvider {
     throw new Error(`Connector ${id} is not yet implemented.`);
   }
 
-  // Right now, all available ones are backed by Google OAuth
+  // Google Workspace connectors
   if (['GMAIL', 'GOOGLE_CALENDAR', 'GOOGLE_SHEETS', 'GOOGLE_DRIVE'].includes(id)) {
     providerInstances[id] = new GoogleConnectorProvider(id);
+    return providerInstances[id];
+  }
+
+  // Messaging & Customer Communication
+  if (id === 'WHATSAPP') {
+    providerInstances[id] = new WhatsAppConnectorProvider();
+    return providerInstances[id];
+  }
+
+  // Payments & Billing
+  if (id === 'RAZORPAY') {
+    providerInstances[id] = new RazorpayConnectorProvider();
+    return providerInstances[id];
+  }
+  if (id === 'STRIPE') {
+    providerInstances[id] = new StripeConnectorProvider();
+    return providerInstances[id];
+  }
+
+  // Workspace & Productivity
+  if (id === 'NOTION') {
+    providerInstances[id] = new NotionConnectorProvider();
+    return providerInstances[id];
+  }
+  if (id === 'TRELLO') {
+    providerInstances[id] = new TrelloConnectorProvider();
     return providerInstances[id];
   }
 

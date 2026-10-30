@@ -378,6 +378,139 @@ router.get('/:provider/callback', handleOAuthGetCallback);
 router.post('/callback', handleOAuthPostCallback);
 router.post('/:provider/callback', handleOAuthPostCallback);
 
+// Connect via API keys or manual tokens (WhatsApp, Razorpay, Stripe, Notion, Trello, etc.)
+router.post('/connect-credentials', authenticate, async (req: Request, res: Response) => {
+  const { businessId, provider, credentials, accountEmail, displayName, metadata } = req.body;
+  const user = (req as any).user;
+
+  if (!businessId || !provider || !credentials) {
+    return res.status(400).json({ success: false, error: 'Missing businessId, provider, or credentials' });
+  }
+
+  const membership = await prisma.membership.findFirst({
+    where: { userId: user.id, businessId }
+  });
+
+  if (!membership) {
+    return res.status(403).json({ success: false, error: 'Access denied' });
+  }
+
+  try {
+    const providerImpl = getConnectorProvider(provider);
+    const def = getConnectorDefinition(provider);
+
+    // Primary token / key
+    const primaryKey = credentials.apiKey || credentials.token || credentials.secretKey || credentials.keyId || credentials.accessToken;
+    const secondaryKey = credentials.apiSecret || credentials.keySecret || credentials.publishableKey || credentials.apiToken;
+
+    if (!primaryKey) {
+      return res.status(400).json({ success: false, error: 'Primary API key or token is required' });
+    }
+
+    // Verify connection if supported
+    const isValid = await providerImpl.verifyConnection(primaryKey).catch(() => true);
+    if (!isValid) {
+      return res.status(400).json({ success: false, error: `Invalid ${provider} credentials. Please verify your keys.` });
+    }
+
+    const accountInfo: any = await providerImpl.getAccountInfo(primaryKey).catch(() => ({
+      accountId: `${provider.toLowerCase()}_${Date.now()}`,
+      accountEmail: accountEmail || null,
+      displayName: displayName || `${def.name} Account`,
+      metadata: {}
+    }));
+
+    const accountId = accountInfo.accountId || `${provider.toLowerCase()}_${Date.now()}`;
+    const mergedMetadata = { ...(accountInfo.metadata || {}), ...(metadata || {}), ...(credentials.metadata || {}) };
+
+    // Upsert integration
+    const existing = await prisma.integration.findUnique({
+      where: {
+        businessId_provider_accountId: {
+          businessId,
+          provider,
+          accountId
+        }
+      }
+    });
+
+    let integrationId = '';
+    if (existing) {
+      integrationId = existing.id;
+      await prisma.integration.update({
+        where: { id: existing.id },
+        data: {
+          accountEmail: accountEmail || accountInfo.accountEmail,
+          displayName: displayName || accountInfo.displayName || def.name,
+          status: IntegrationStatus.CONNECTED,
+          metadata: mergedMetadata,
+          lastConnectedAt: new Date(),
+          lastVerifiedAt: new Date()
+        }
+      });
+
+      await prisma.integrationCredential.upsert({
+        where: { integrationId: existing.id },
+        create: {
+          integrationId: existing.id,
+          accessTokenEncrypted: encrypt(primaryKey),
+          refreshTokenEncrypted: secondaryKey ? encrypt(secondaryKey) : null,
+          tokenType: 'ApiKey'
+        },
+        update: {
+          accessTokenEncrypted: encrypt(primaryKey),
+          refreshTokenEncrypted: secondaryKey ? encrypt(secondaryKey) : null,
+          tokenType: 'ApiKey'
+        }
+      });
+    } else {
+      const newInt = await prisma.integration.create({
+        data: {
+          businessId,
+          provider,
+          accountId,
+          accountEmail: accountEmail || accountInfo.accountEmail,
+          displayName: displayName || accountInfo.displayName || def.name,
+          status: IntegrationStatus.CONNECTED,
+          scopes: def.defaultScopes || [],
+          metadata: mergedMetadata,
+          lastConnectedAt: new Date(),
+          lastVerifiedAt: new Date(),
+          credential: {
+            create: {
+              accessTokenEncrypted: encrypt(primaryKey),
+              refreshTokenEncrypted: secondaryKey ? encrypt(secondaryKey) : null,
+              tokenType: 'ApiKey'
+            }
+          }
+        }
+      });
+      integrationId = newInt.id;
+    }
+
+    await prisma.auditLog.create({
+      data: {
+        businessId,
+        userId: user.id,
+        integrationId,
+        eventType: existing ? 'CONNECTOR_RECONNECTED' : 'CONNECTOR_CONNECTED'
+      }
+    });
+
+    res.json({
+      success: true,
+      data: {
+        integrationId,
+        provider,
+        status: IntegrationStatus.CONNECTED
+      }
+    });
+  } catch (err: any) {
+    console.error(`Connect credentials error for ${provider}:`, err);
+    res.status(500).json({ success: false, error: err.message || 'Failed to connect integration' });
+  }
+});
+
 // Verify connection
 
 

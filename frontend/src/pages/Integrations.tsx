@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import { apiCall } from '../lib/api';
-import { Loader2, Search, CheckCircle2, AlertTriangle, Plug, Plus, Zap, RefreshCw } from 'lucide-react';
+import { Loader2, Search, CheckCircle2, AlertTriangle, Plug, Plus, Zap, RefreshCw, X, KeyRound, ExternalLink } from 'lucide-react';
 
 const getFavicon = (domain: string) => `https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://${domain}&size=128`;
 
@@ -24,9 +24,9 @@ const ALL_CONNECTORS = [
   
   // Productivity & Docs
   { id: 'NOTION', name: 'Notion', category: 'Productivity & Docs', description: 'Automate Notion databases and pages.', iconUrl: getFavicon('notion.so') },
+  { id: 'TRELLO', name: 'Trello', category: 'Productivity & Docs', description: 'Manage boards, lists, and cards.', iconUrl: getFavicon('trello.com') },
   { id: 'CODA', name: 'Coda', category: 'Productivity & Docs', description: 'Sync data with Coda docs.', iconUrl: getFavicon('coda.io') },
   { id: 'EVERNOTE', name: 'Evernote', category: 'Productivity & Docs', description: 'Create and manage notes.', iconUrl: getFavicon('evernote.com') },
-  { id: 'TRELLO', name: 'Trello', category: 'Productivity & Docs', description: 'Manage boards, lists, and cards.', iconUrl: getFavicon('trello.com') },
   { id: 'ASANA', name: 'Asana', category: 'Productivity & Docs', description: 'Manage team projects and tasks.', iconUrl: getFavicon('asana.com') },
   { id: 'CLICKUP', name: 'ClickUp', category: 'Productivity & Docs', description: 'One app to replace them all.', iconUrl: getFavicon('clickup.com') },
   { id: 'DROPBOX', name: 'Dropbox', category: 'Productivity & Docs', description: 'Secure file sharing and storage.', iconUrl: getFavicon('dropbox.com') },
@@ -52,10 +52,10 @@ const ALL_CONNECTORS = [
   { id: 'GORGIAS', name: 'Gorgias', category: 'Support & Helpdesk', description: 'Ecommerce helpdesk automation.', iconUrl: getFavicon('gorgias.com') },
 
   // Messaging & Chat
+  { id: 'WHATSAPP', name: 'WhatsApp Business', category: 'Messaging & Chat', description: 'Send and receive WhatsApp customer messages via Meta Cloud API.', iconUrl: getFavicon('whatsapp.com') },
   { id: 'SLACK', name: 'Slack', category: 'Messaging & Chat', description: 'Send messages and notifications to channels.', iconUrl: getFavicon('slack.com') },
   { id: 'DISCORD', name: 'Discord', category: 'Messaging & Chat', description: 'Automate Discord server messages.', iconUrl: getFavicon('discord.com') },
   { id: 'MS_TEAMS', name: 'Microsoft Teams', category: 'Messaging & Chat', description: 'Chat and collaboration automation.', iconUrl: getFavicon('teams.microsoft.com') },
-  { id: 'WHATSAPP', name: 'WhatsApp Business', category: 'Messaging & Chat', description: 'Send WhatsApp Business messages.', iconUrl: getFavicon('whatsapp.com') },
   { id: 'TELEGRAM', name: 'Telegram', category: 'Messaging & Chat', description: 'Automate Telegram bots and channels.', iconUrl: getFavicon('telegram.org') },
 
   // Social Media
@@ -73,11 +73,11 @@ const ALL_CONNECTORS = [
   { id: 'BREVO', name: 'Brevo', category: 'Marketing & Ads', description: 'Email marketing and CRM tools.', iconUrl: getFavicon('brevo.com') },
 
   // Finance & Billing
-  { id: 'STRIPE', name: 'Stripe', category: 'Finance & Billing', description: 'Payment processing and subscriptions.', iconUrl: getFavicon('stripe.com') },
+  { id: 'RAZORPAY', name: 'Razorpay', category: 'Finance & Billing', description: 'Accept UPI, cards, and generate instant payment links.', iconUrl: getFavicon('razorpay.com') },
+  { id: 'STRIPE', name: 'Stripe', category: 'Finance & Billing', description: 'Global credit card payment processing and hosted checkout.', iconUrl: getFavicon('stripe.com') },
   { id: 'QUICKBOOKS', name: 'QuickBooks', category: 'Finance & Billing', description: 'Accounting and invoicing automation.', iconUrl: getFavicon('quickbooks.intuit.com') },
   { id: 'XERO', name: 'Xero', category: 'Finance & Billing', description: 'Cloud-based accounting software.', iconUrl: getFavicon('xero.com') },
   { id: 'PAYPAL', name: 'PayPal', category: 'Finance & Billing', description: 'Online payments system.', iconUrl: getFavicon('paypal.com') },
-  { id: 'RAZORPAY', name: 'Razorpay', category: 'Finance & Billing', description: 'Payment gateway and financial solutions.', iconUrl: getFavicon('razorpay.com') },
 
   // Developer Tools
   { id: 'GITHUB', name: 'GitHub', category: 'Developer Tools', description: 'Automate issues, PRs, and repositories.', iconUrl: getFavicon('github.com') },
@@ -92,19 +92,21 @@ const ALL_CONNECTORS = [
   { id: 'HUGGINGFACE', name: 'Hugging Face', category: 'AI & Machine Learning', description: 'Machine learning models and datasets.', iconUrl: getFavicon('huggingface.co') }
 ];
 
+const API_KEY_CONNECTORS = ['WHATSAPP', 'RAZORPAY', 'STRIPE', 'NOTION', 'TRELLO'];
+
 const ConnectorImage = ({ src, alt }: { src?: string, alt: string }) => {
   const [error, setError] = useState(false);
   
   if (!src || error) {
     return <Plug className="w-6 h-6 text-slate-400" />;
   }
-  
+
   return (
     <img 
       src={src} 
       alt={alt} 
       onError={() => setError(true)}
-      className="w-full h-full object-contain mix-blend-multiply" 
+      className="w-8 h-8 object-contain"
     />
   );
 };
@@ -116,6 +118,12 @@ export function Integrations() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [connecting, setConnecting] = useState<string | null>(null);
+
+  // Credentials Modal State
+  const [modalConnector, setModalConnector] = useState<any | null>(null);
+  const [formValues, setFormValues] = useState<any>({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [modalError, setModalError] = useState('');
 
   useEffect(() => {
     if (business) {
@@ -146,6 +154,14 @@ export function Integrations() {
   };
 
   const handleConnect = async (providerId: string) => {
+    if (API_KEY_CONNECTORS.includes(providerId)) {
+      const conn = ALL_CONNECTORS.find(c => c.id === providerId);
+      setModalConnector(conn || { id: providerId, name: providerId });
+      setFormValues({});
+      setModalError('');
+      return;
+    }
+
     setConnecting(providerId);
     try {
       const res = await apiCall(`/integrations/${providerId}/connect?businessId=${business?.id}`);
@@ -154,10 +170,56 @@ export function Integrations() {
       } else {
         alert('Connector coming soon or OAuth setup required in backend.');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to initiate connection:', error);
+      alert(`Connection failed: ${error.message || 'Unknown error'}`);
     } finally {
       setConnecting(null);
+    }
+  };
+
+  const handleSubmitCredentials = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!modalConnector) return;
+    setIsSubmitting(true);
+    setModalError('');
+
+    try {
+      let credentials: any = {};
+      let metadata: any = {};
+
+      if (modalConnector.id === 'WHATSAPP') {
+        credentials.accessToken = formValues.accessToken;
+        metadata.phoneNumberId = formValues.phoneNumberId;
+      } else if (modalConnector.id === 'RAZORPAY') {
+        credentials.keyId = formValues.keyId;
+        credentials.keySecret = formValues.keySecret;
+      } else if (modalConnector.id === 'STRIPE') {
+        credentials.secretKey = formValues.secretKey;
+        credentials.publishableKey = formValues.publishableKey;
+      } else if (modalConnector.id === 'NOTION') {
+        credentials.token = formValues.token;
+      } else if (modalConnector.id === 'TRELLO') {
+        credentials.apiKey = formValues.apiKey;
+        credentials.apiToken = formValues.apiToken;
+      }
+
+      await apiCall('/integrations/connect-credentials', {
+        method: 'POST',
+        body: JSON.stringify({
+          businessId: business?.id,
+          provider: modalConnector.id,
+          credentials,
+          metadata
+        })
+      });
+
+      setModalConnector(null);
+      loadData();
+    } catch (err: any) {
+      setModalError(err.message || 'Failed to connect integration.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -218,35 +280,39 @@ export function Integrations() {
           
           {/* Active Connections Highlight */}
           {activeIntegrations.length > 0 && selectedCategory === 'All' && !searchQuery && (
-            <div className="bg-gradient-to-br from-emerald-50 to-teal-50/30 rounded-2xl border border-emerald-100 p-6 shadow-sm">
-              <h2 className="text-lg font-bold text-emerald-900 flex items-center gap-2 mb-6">
-                <Zap className="w-5 h-5 text-emerald-600" /> Active Connections
-              </h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                {activeIntegrations.map((active) => {
-                  const baseConnector = ALL_CONNECTORS.find(c => c.id === active.provider);
-                  return (
-                    <div key={active.id} className="bg-white p-5 rounded-xl border border-emerald-200 shadow-sm flex items-center justify-between hover:shadow-md transition-shadow group">
-                      <div className="flex items-center gap-4">
-                        <div className="w-12 h-12 rounded-xl bg-slate-50 flex items-center justify-center border border-slate-100 p-2 shrink-0">
-                           <ConnectorImage src={baseConnector?.iconUrl} alt={baseConnector?.name || active.provider} />
-                        </div>
-                        <div>
-                          <div className="font-bold text-slate-900 leading-tight">{baseConnector?.name || active.provider}</div>
-                          <div className="text-[10px] text-emerald-600 font-bold mt-1.5 flex items-center gap-1 uppercase tracking-wider bg-emerald-50 px-2 py-0.5 rounded-full w-fit border border-emerald-100">
-                            <CheckCircle2 size={10} /> CONNECTED
-                          </div>
-                        </div>
+            <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50 border border-blue-100/60 rounded-3xl p-8 shadow-sm">
+              <div className="flex items-center gap-3 mb-6">
+                <div className="p-2.5 bg-blue-600 text-white rounded-xl shadow-md shadow-blue-500/20">
+                  <Zap size={20} />
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold text-slate-900">Connected Applications</h2>
+                  <p className="text-sm text-slate-500">Live connectors powering your autonomous workflows</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {activeIntegrations.map((int: any) => (
+                  <div key={int.id} className="bg-white/80 backdrop-blur-sm border border-slate-200/80 rounded-2xl p-5 shadow-sm flex items-center justify-between gap-4 hover:shadow-md transition-all">
+                    <div className="flex items-center gap-3.5">
+                      <div className="w-10 h-10 rounded-xl bg-slate-50 flex items-center justify-center border border-slate-100 p-2">
+                        <ConnectorImage src={ALL_CONNECTORS.find(c => c.id === int.provider)?.iconUrl} alt={int.displayName} />
                       </div>
-                      <button 
-                        onClick={() => handleDisconnect(active.id)}
-                        className="text-xs text-slate-400 font-medium hover:text-rose-600 hover:bg-rose-50 px-3 py-1.5 rounded-lg transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
-                      >
-                        Disconnect
-                      </button>
+                      <div>
+                        <div className="font-semibold text-slate-900 flex items-center gap-2">
+                          {int.displayName}
+                          <span className={`w-2 h-2 rounded-full ${int.status === 'CONNECTED' ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
+                        </div>
+                        <div className="text-xs text-slate-400 truncate max-w-[150px]">{int.accountEmail || int.provider}</div>
+                      </div>
                     </div>
-                  )
-                })}
+                    <button 
+                      onClick={() => handleDisconnect(int.id)}
+                      className="text-xs font-semibold px-3 py-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors border border-transparent hover:border-red-100"
+                    >
+                      Disconnect
+                    </button>
+                  </div>
+                ))}
               </div>
             </div>
           )}
@@ -288,7 +354,7 @@ export function Integrations() {
                           {isConnected ? (
                             <button 
                               onClick={() => handleDisconnect(activeInstance.id)}
-                              className="w-full py-2.5 text-sm font-semibold text-slate-600 bg-slate-50 hover:bg-slate-100 hover:text-slate-900 border border-slate-200 rounded-xl transition-colors shadow-sm"
+                              className="w-full py-2.5 text-sm font-semibold text-slate-600 bg-slate-50 hover:bg-slate-100 hover:text-slate-900 border border-slate-200 rounded-xl transition-colors shadow-sm cursor-pointer"
                             >
                               Manage Connection
                             </button>
@@ -296,7 +362,7 @@ export function Integrations() {
                             <button 
                               disabled={isThisConnecting}
                               onClick={() => handleConnect(connector.id)}
-                              className="w-full py-2.5 text-sm font-semibold text-white bg-slate-900 hover:bg-blue-600 disabled:opacity-70 disabled:cursor-not-allowed rounded-xl transition-all shadow-sm flex items-center justify-center gap-2"
+                              className="w-full py-2.5 text-sm font-semibold text-white bg-slate-900 hover:bg-blue-600 disabled:opacity-70 disabled:cursor-not-allowed rounded-xl transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer"
                             >
                               {isThisConnecting ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
                               {isThisConnecting ? 'Connecting...' : 'Connect'}
@@ -311,6 +377,185 @@ export function Integrations() {
             );
           })}
 
+        </div>
+      )}
+
+      {/* Manual API Credentials Modal */}
+      {modalConnector && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-slate-100 overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-white shadow-sm flex items-center justify-center border border-slate-100 p-2">
+                  <ConnectorImage src={modalConnector.iconUrl} alt={modalConnector.name} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-lg">Connect {modalConnector.name}</h3>
+                  <p className="text-xs text-slate-500">Enter your credentials to link this service</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setModalConnector(null)}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmitCredentials} className="p-6 space-y-4">
+              {modalError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-red-600 text-xs font-medium">
+                  {modalError}
+                </div>
+              )}
+
+              {modalConnector.id === 'WHATSAPP' && (
+                <>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Meta Access Token</label>
+                    <input 
+                      required
+                      type="password"
+                      placeholder="EAAG... (Meta Cloud API System User Token)"
+                      value={formValues.accessToken || ''}
+                      onChange={e => setFormValues({ ...formValues, accessToken: e.target.value })}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all"
+                    />
+                    <p className="text-[11px] text-slate-400 mt-1">From Meta for Developers &gt; WhatsApp &gt; API Setup.</p>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Phone Number ID</label>
+                    <input 
+                      required
+                      type="text"
+                      placeholder="e.g. 104928374928172"
+                      value={formValues.phoneNumberId || ''}
+                      onChange={e => setFormValues({ ...formValues, phoneNumberId: e.target.value })}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all"
+                    />
+                  </div>
+                </>
+              )}
+
+              {modalConnector.id === 'RAZORPAY' && (
+                <>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Key ID</label>
+                    <input 
+                      required
+                      type="text"
+                      placeholder="rzp_test_... or rzp_live_..."
+                      value={formValues.keyId || ''}
+                      onChange={e => setFormValues({ ...formValues, keyId: e.target.value })}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all"
+                    />
+                    <p className="text-[11px] text-slate-400 mt-1">From Razorpay Dashboard &gt; Settings &gt; API Keys.</p>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Key Secret</label>
+                    <input 
+                      required
+                      type="password"
+                      placeholder="Razorpay Key Secret"
+                      value={formValues.keySecret || ''}
+                      onChange={e => setFormValues({ ...formValues, keySecret: e.target.value })}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all"
+                    />
+                  </div>
+                </>
+              )}
+
+              {modalConnector.id === 'STRIPE' && (
+                <>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Secret Key</label>
+                    <input 
+                      required
+                      type="password"
+                      placeholder="sk_test_... or sk_live_..."
+                      value={formValues.secretKey || ''}
+                      onChange={e => setFormValues({ ...formValues, secretKey: e.target.value })}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all"
+                    />
+                    <p className="text-[11px] text-slate-400 mt-1">From Stripe Dashboard &gt; Developers &gt; API Keys.</p>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Publishable Key (Optional)</label>
+                    <input 
+                      type="text"
+                      placeholder="pk_test_... or pk_live_..."
+                      value={formValues.publishableKey || ''}
+                      onChange={e => setFormValues({ ...formValues, publishableKey: e.target.value })}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all"
+                    />
+                  </div>
+                </>
+              )}
+
+              {modalConnector.id === 'NOTION' && (
+                <>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Internal Integration Secret</label>
+                    <input 
+                      required
+                      type="password"
+                      placeholder="secret_..."
+                      value={formValues.token || ''}
+                      onChange={e => setFormValues({ ...formValues, token: e.target.value })}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all"
+                    />
+                    <p className="text-[11px] text-slate-400 mt-1">From notion.so/my-integrations &gt; Create new integration.</p>
+                  </div>
+                </>
+              )}
+
+              {modalConnector.id === 'TRELLO' && (
+                <>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Trello API Key</label>
+                    <input 
+                      required
+                      type="text"
+                      placeholder="Trello Developer API Key"
+                      value={formValues.apiKey || ''}
+                      onChange={e => setFormValues({ ...formValues, apiKey: e.target.value })}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all"
+                    />
+                    <p className="text-[11px] text-slate-400 mt-1">From trello.com/power-ups/admin &gt; API Key.</p>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Trello Token</label>
+                    <input 
+                      required
+                      type="password"
+                      placeholder="Trello User Token"
+                      value={formValues.apiToken || ''}
+                      onChange={e => setFormValues({ ...formValues, apiToken: e.target.value })}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all"
+                    />
+                  </div>
+                </>
+              )}
+
+              <div className="pt-4 flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setModalConnector(null)}
+                  className="flex-1 py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl text-sm transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="flex-1 py-2.5 px-4 bg-blue-600 hover:bg-blue-700 disabled:opacity-70 text-white font-semibold rounded-xl text-sm shadow-md shadow-blue-500/20 transition-all flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  {isSubmitting ? <Loader2 size={16} className="animate-spin" /> : <KeyRound size={16} />}
+                  {isSubmitting ? 'Verifying & Saving...' : 'Save & Connect'}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>
