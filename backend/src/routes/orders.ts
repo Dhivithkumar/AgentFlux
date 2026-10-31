@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { authenticate, requireBusinessMembership } from '../middleware/auth';
 import { orderService } from '../services/order/OrderService';
+import { prisma } from '@agent-flux/database';
 
 const router = Router({ mergeParams: true });
 
@@ -143,13 +144,73 @@ router.post('/:id/generate-invoice', async (req: any, res) => {
     // Generate Invoice (PDF generation included)
     const invoiceId = await invoiceService.generateInvoice(businessId, id);
     
-    // Send Invoice to customer automatically
-    await invoiceService.sendInvoice(businessId, invoiceId);
+    // Attempt auto-emailing customer if Gmail is connected
+    let emailed = false;
+    let emailMessage = '';
+    try {
+      await invoiceService.sendInvoice(businessId, invoiceId);
+      emailed = true;
+    } catch (sendErr: any) {
+      console.warn('[GenerateInvoice] Auto-emailing customer skipped or not connected:', sendErr.message);
+      emailMessage = sendErr.message?.includes('Gmail integration not connected')
+        ? 'Connect Gmail in Integrations to email invoices directly to customers.'
+        : sendErr.message;
+    }
     
-    res.json({ success: true, invoiceId });
+    res.json({
+      success: true,
+      invoiceId,
+      emailed,
+      message: emailed 
+        ? 'Invoice generated and emailed to customer!' 
+        : `Invoice generated successfully! ${emailMessage}`
+    });
   } catch (error: any) {
     console.error('[Invoice Generation Error]:', error);
     res.status(500).json({ error: error?.message || error?.toString() || 'Unknown error' });
+  }
+});
+
+router.get('/:id/invoice-pdf', async (req: any, res) => {
+  try {
+    const { businessId, id } = req.params;
+    const { invoiceService } = require('../services/invoice/InvoiceService');
+    const { documentGenerationService } = require('../services/documents/DocumentGenerationService');
+    const path = require('path');
+    const fs = require('fs');
+
+    const order = await orderService.getOrder(businessId, id);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+
+    let invoice = order.invoices?.[0];
+    if (!invoice) {
+      const invoiceId = await invoiceService.generateInvoice(businessId, id);
+      invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
+    }
+
+    if (!invoice) return res.status(404).json({ error: 'Invoice could not be located' });
+
+    let doc = invoice.generatedDocumentId ? await prisma.knowledgeDocument.findUnique({ where: { id: invoice.generatedDocumentId } }) : null;
+    let pdfPath = doc?.storagePath;
+
+    if (!pdfPath || !fs.existsSync(pdfPath)) {
+      console.log(`[InvoicePDF] Generating/regenerating PDF for invoice ${invoice.id}...`);
+      await documentGenerationService.generateDocument(businessId, 'INVOICE', invoice.id);
+      invoice = await prisma.invoice.findUnique({ where: { id: invoice.id } });
+      doc = invoice?.generatedDocumentId ? await prisma.knowledgeDocument.findUnique({ where: { id: invoice.generatedDocumentId } }) : null;
+      pdfPath = doc?.storagePath;
+    }
+
+    if (!pdfPath || !fs.existsSync(pdfPath)) {
+      return res.status(404).json({ error: 'Invoice PDF file not found' });
+    }
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${invoice?.invoiceNumber || 'Invoice'}.pdf"`);
+    fs.createReadStream(pdfPath).pipe(res);
+  } catch (error: any) {
+    console.error('Invoice PDF error:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 

@@ -56,6 +56,37 @@ router.post('/:id/generate', async (req: any, res) => {
   }
 });
 
+router.get('/:id/pdf', async (req: any, res) => {
+  try {
+    const { businessId, id } = req.params;
+    const path = require('path');
+    const fs = require('fs');
+
+    let invoice = await prisma.invoice.findUnique({ where: { id, businessId } });
+    if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
+
+    let doc = invoice.generatedDocumentId ? await prisma.knowledgeDocument.findUnique({ where: { id: invoice.generatedDocumentId } }) : null;
+    let pdfPath = doc?.storagePath;
+
+    if (!pdfPath || !fs.existsSync(pdfPath)) {
+      await documentGenerationService.generateDocument(businessId, 'INVOICE', invoice.id);
+      invoice = await prisma.invoice.findUnique({ where: { id: invoice.id } });
+      doc = invoice?.generatedDocumentId ? await prisma.knowledgeDocument.findUnique({ where: { id: invoice.generatedDocumentId } }) : null;
+      pdfPath = doc?.storagePath;
+    }
+
+    if (!pdfPath || !fs.existsSync(pdfPath)) {
+      return res.status(404).json({ error: 'Invoice PDF file not found' });
+    }
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${invoice?.invoiceNumber || 'Invoice'}.pdf"`);
+    fs.createReadStream(pdfPath).pipe(res);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.post('/:id/status', async (req: any, res) => {
   try {
     const { businessId, id } = req.params;

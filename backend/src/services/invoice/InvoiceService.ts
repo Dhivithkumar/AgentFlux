@@ -237,12 +237,45 @@ export class InvoiceService {
     const fs = require('fs');
     const path = require('path');
     
-    let pdfPath = doc.storagePath;
-    if (pdfPath.startsWith('business/')) {
+    let pdfPath = doc?.storagePath;
+    if (pdfPath && pdfPath.startsWith('business/')) {
         pdfPath = path.join(process.cwd(), 'uploads', pdfPath.substring(9));
     }
 
-    if (!fs.existsSync(pdfPath)) throw new Error('PDF file not found on disk');
+    if (!pdfPath || !fs.existsSync(pdfPath)) {
+      const candidates = [
+        pdfPath,
+        path.join(process.cwd(), 'uploads', (pdfPath || '').replace(/^business\//, '')),
+        path.join(process.cwd(), 'backend', 'uploads', (pdfPath || '').replace(/^business\//, '')),
+        path.join(process.cwd(), `uploads/documents/${businessId}/invoices/${invoice.id}.pdf`),
+        path.join(__dirname, '../../../../uploads', (pdfPath || '').replace(/^business\//, ''))
+      ].filter(Boolean);
+      for (const cand of candidates) {
+        if (fs.existsSync(cand)) {
+          pdfPath = cand;
+          break;
+        }
+      }
+    }
+
+    if (!pdfPath || !fs.existsSync(pdfPath)) {
+      console.log(`[InvoiceService] PDF missing on disk for invoice ${invoice.id}. Regenerating...`);
+      await this.docGenService.generateDocument(businessId, 'INVOICE', invoice.id);
+      const updatedInvoice = await prisma.invoice.findUnique({ where: { id: invoice.id } });
+      const targetDocId = updatedInvoice?.generatedDocumentId || invoice.generatedDocumentId;
+      if (targetDocId) {
+        const reDoc = await prisma.knowledgeDocument.findUnique({
+          where: { id: targetDocId }
+        });
+        if (reDoc?.storagePath && fs.existsSync(reDoc.storagePath)) {
+          pdfPath = reDoc.storagePath;
+        }
+      }
+    }
+
+    if (!pdfPath || !fs.existsSync(pdfPath)) {
+      throw new Error(`PDF file could not be loaded from disk or regenerated for invoice ${invoice.invoiceNumber}`);
+    }
 
     const pdfBase64 = fs.readFileSync(pdfPath).toString('base64');
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useOutletContext, useParams, Link } from 'react-router-dom';
-import { apiCall } from '../../lib/api';
+import { apiCall, API_URL } from '../../lib/api';
 
 export default function OrderDetail() {
   const { business } = useOutletContext<any>();
@@ -59,6 +59,17 @@ export default function OrderDetail() {
           <p className="text-slate-500 mt-1">Created on {new Date(order.createdAt).toLocaleString()}</p>
         </div>
         <div className="flex items-center gap-2">
+          {order.invoices && order.invoices.length > 0 && (
+            <button
+              onClick={() => {
+                window.open(`${API_URL}/businesses/${business.id}/orders/${id}/invoice-pdf`, '_blank');
+              }}
+              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium flex items-center gap-2 shadow-sm mr-2 transition-colors cursor-pointer"
+            >
+              📥 View / Download PDF
+            </button>
+          )}
+
           {order.status === 'CONFIRMED' && (
             <button
               onClick={async () => {
@@ -66,8 +77,8 @@ export default function OrderDetail() {
                 try {
                   const btn = document.getElementById(`btn-inv-detail`);
                   if (btn) btn.innerText = 'Generating...';
-                  await apiCall(`/businesses/${business.id}/orders/${id}/generate-invoice`, { method: 'POST' });
-                  alert('Invoice generated and sent to customer!');
+                  const res = await apiCall(`/businesses/${business.id}/orders/${id}/generate-invoice`, { method: 'POST' });
+                  alert(res.message || 'Invoice generated successfully!');
                   await loadOrder();
                 } catch (e: any) {
                   alert(e.message || 'Failed to generate invoice');
@@ -78,9 +89,9 @@ export default function OrderDetail() {
               }}
               disabled={updating}
               id="btn-inv-detail"
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2 shadow-sm mr-2"
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2 shadow-sm mr-2 cursor-pointer"
             >
-              📄 Generate Invoice
+              📄 {order.invoices && order.invoices.length > 0 ? 'Regenerate Invoice' : 'Generate Invoice'}
             </button>
           )}
           {order.status === 'PENDING_OWNER_CONFIRMATION' && (
