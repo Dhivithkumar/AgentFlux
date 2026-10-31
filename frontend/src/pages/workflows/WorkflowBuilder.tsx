@@ -304,7 +304,7 @@ export function WorkflowBuilder() {
   const activeVersion = workflow.versions?.find((v: any) => v.id === workflow.activeVersionId) || workflow.versions?.[0];
 
   return (
-    <div className="flex flex-col h-[calc(100vh-80px)] overflow-hidden animate-in fade-in duration-500 pb-6 px-6">
+    <div className="flex flex-col h-full min-h-0 overflow-hidden animate-in fade-in duration-500 pb-2 px-2 sm:px-4">
       {/* Top Header */}
       <div className="flex items-center gap-4 mb-4 shrink-0 pt-3">
         <button onClick={() => navigate('/dashboard/workflows')} className="p-2 hover:bg-slate-100 rounded-lg transition-colors border border-slate-200 bg-white">

@@ -45,6 +45,7 @@ export default function DashboardLayout() {
   
   const navigate = useNavigate();
   const location = useLocation();
+  const mainContentRef = React.useRef<HTMLElement>(null);
 
   const fetchBusinesses = async () => {
     try {
@@ -82,11 +83,14 @@ export default function DashboardLayout() {
     });
   }, [navigate]);
 
-  // Close mobile drawer and dropdowns on route changes
+  // Close mobile drawer and dropdowns on route changes, and reset main content scroll
   useEffect(() => {
     setIsMobileMenuOpen(false);
     setIsSwitcherOpen(false);
     setIsUserMenuOpen(false);
+    if (mainContentRef.current) {
+      mainContentRef.current.scrollTo({ top: 0, behavior: 'instant' });
+    }
   }, [location.pathname]);
 
   const handleSwitchBusiness = (id: string) => {
@@ -204,8 +208,14 @@ export default function DashboardLayout() {
     }
   }
 
+  // Check if current page is full-bleed studio canvas (e.g. Workflow Builder or Calendar Split-View)
+  const isStudioPage =
+    location.pathname.startsWith('/dashboard/calendar') ||
+    (location.pathname.startsWith('/dashboard/workflows/') &&
+      !['/dashboard/workflows', '/dashboard/workflows/drafts', '/dashboard/workflows/opportunities', '/dashboard/workflows/approvals', '/dashboard/workflows/executions'].includes(location.pathname));
+
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row antialiased font-sans">
+    <div className="h-screen max-h-screen h-[100dvh] max-h-[100dvh] w-full bg-slate-50 flex overflow-hidden antialiased font-sans">
       {/* MOBILE BACKDROP */}
       {isMobileMenuOpen && (
         <div
@@ -214,14 +224,14 @@ export default function DashboardLayout() {
         />
       )}
 
-      {/* SIDEBAR NAVIGATION */}
+      {/* SIDEBAR NAVIGATION - FIXED WITH INDEPENDENT SCROLL */}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 w-72 bg-slate-900 border-r border-slate-800/80 text-slate-300 flex flex-col transform transition-transform duration-300 ease-in-out md:translate-x-0 md:static md:z-auto ${
+        className={`fixed inset-y-0 left-0 z-50 w-72 h-full max-h-screen max-h-[100dvh] bg-slate-900 border-r border-slate-800/80 text-slate-300 flex flex-col shrink-0 transform transition-transform duration-300 ease-in-out md:static md:translate-x-0 select-none ${
           isMobileMenuOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full'
         }`}
       >
         {/* Brand Header */}
-        <div className="h-16 px-6 border-b border-slate-800/80 flex items-center justify-between bg-slate-950/40">
+        <div className="h-16 shrink-0 px-6 border-b border-slate-800/80 flex items-center justify-between bg-slate-950/40">
           <Link to="/dashboard" className="flex items-center gap-3 group">
             <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-violet-500 p-0.5 shadow-lg shadow-indigo-600/30 flex items-center justify-center transition-transform group-hover:scale-105">
               <Activity className="text-white w-5 h-5" />
@@ -244,8 +254,8 @@ export default function DashboardLayout() {
           </button>
         </div>
 
-        {/* Navigation Sections */}
-        <nav className="flex-1 overflow-y-auto px-4 py-4 space-y-6 scrollbar-thin scrollbar-thumb-slate-800">
+        {/* Navigation Sections - Independently Scrollable */}
+        <nav className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-3 py-4 space-y-6 scrollbar-thin scrollbar-thumb-slate-800 focus:outline-none">
           {navSections.map((section, sIdx) => (
             <div key={sIdx} className="space-y-1">
               <div className="px-3 pb-1 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
@@ -282,8 +292,8 @@ export default function DashboardLayout() {
           ))}
         </nav>
 
-        {/* Footer User Profile Card */}
-        <div className="p-4 border-t border-slate-800/80 bg-slate-950/60">
+        {/* Footer User Profile Card - Pinned at bottom of sidebar */}
+        <div className="shrink-0 p-4 border-t border-slate-800/80 bg-slate-950/60">
           <div className="flex items-center gap-3 p-2 rounded-xl bg-slate-800/50 border border-slate-700/50">
             <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-bold text-xs shadow-sm">
               {userInitials}
@@ -303,10 +313,10 @@ export default function DashboardLayout() {
         </div>
       </aside>
 
-      {/* MAIN CONTENT AREA */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Top Header Navbar */}
-        <header className="bg-white/95 backdrop-blur-md border-b border-slate-200/80 h-16 flex items-center justify-between px-4 sm:px-8 z-30 sticky top-0 shadow-sm">
+      {/* MAIN CONTENT AREA - INDEPENDENT SCROLL */}
+      <div className="flex-1 flex flex-col min-w-0 h-full max-h-screen max-h-[100dvh] overflow-hidden">
+        {/* Top Header Navbar - Pinned at top of main area */}
+        <header className="h-16 shrink-0 bg-white/95 backdrop-blur-md border-b border-slate-200/80 flex items-center justify-between px-4 sm:px-8 z-30 shadow-xs select-none">
           {/* Left: Mobile Toggle & Business Switcher */}
           <div className="flex items-center gap-3 sm:gap-5 min-w-0">
             <button
@@ -536,9 +546,12 @@ export default function DashboardLayout() {
           </div>
         )}
 
-        {/* Dynamic Page Outlet with Smooth Responsive Container */}
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto">
-          <div className="max-w-7xl mx-auto">
+        {/* Dynamic Page Outlet with Independent Scroll */}
+        <main
+          ref={mainContentRef}
+          className="flex-1 min-h-0 overflow-y-auto overscroll-contain focus:outline-none custom-main-scroll"
+        >
+          <div className={`w-full ${isStudioPage ? 'h-full min-h-full p-2 sm:p-4' : 'max-w-7xl mx-auto p-4 sm:p-6 lg:p-8'}`}>
             <ToastProvider>
               <Outlet key={currentBusiness.id} context={{ business: currentBusiness, user }} />
             </ToastProvider>

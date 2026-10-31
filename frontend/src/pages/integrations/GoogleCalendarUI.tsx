@@ -274,7 +274,7 @@ export function GoogleCalendarUI() {
   };
 
   return (
-    <div className="p-6 h-[calc(100vh-64px)] flex flex-col animate-in fade-in duration-500 bg-slate-50/50">
+    <div className="p-4 sm:p-6 h-full min-h-0 flex flex-col animate-in fade-in duration-500 bg-slate-50/50 rounded-2xl border border-slate-200/80 shadow-xs">
       <div className="w-full flex items-center justify-between mb-6 shrink-0">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
@@ -297,7 +297,7 @@ export function GoogleCalendarUI() {
         </div>
       </div>
 
-      <div className="flex flex-col lg:flex-row gap-6 h-full overflow-hidden pb-4">
+      <div className="flex flex-col lg:flex-row gap-6 flex-1 min-h-0 overflow-hidden pb-2">
         
         {/* Left Side: Embedded Google Calendar (50%) */}
         <div className="w-full lg:w-1/2 h-full bg-white rounded-2xl border border-slate-200 shadow-lg overflow-hidden relative group shrink-0">
