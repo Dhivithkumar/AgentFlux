@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useOutletContext, useParams, Link } from 'react-router-dom';
 import { apiCall, API_URL } from '../../lib/api';
+import { formatCurrency } from '../../lib/currency';
 
 export default function OrderDetail() {
   const { business } = useOutletContext<any>();
@@ -153,19 +154,19 @@ export default function OrderDetail() {
             <div className="space-y-3">
               <div className="flex justify-between text-sm">
                 <span className="text-slate-500">Subtotal</span>
-                <span className="font-medium">{order.currency} {order.subtotal || 0}</span>
+                <span className="font-medium">{formatCurrency(order.subtotal || 0, 'INR')}</span>
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-slate-500">Discount</span>
-                <span className="font-medium text-emerald-600">-{order.currency} {order.discount || 0}</span>
+                <span className="font-medium text-emerald-600">-{formatCurrency(order.discount || 0, 'INR')}</span>
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-slate-500">Tax</span>
-                <span className="font-medium">{order.currency} {order.tax || 0}</span>
+                <span className="font-medium">{formatCurrency(order.tax || 0, 'INR')}</span>
               </div>
               <div className="pt-3 border-t border-slate-100 flex justify-between">
                 <span className="font-bold text-slate-900">Total</span>
-                <span className="font-bold text-slate-900">{order.currency} {order.totalAmount || 0}</span>
+                <span className="font-bold text-slate-900">{formatCurrency(order.totalAmount || 0, 'INR')}</span>
               </div>
             </div>
           </div>

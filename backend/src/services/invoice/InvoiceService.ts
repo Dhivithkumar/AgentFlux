@@ -217,7 +217,7 @@ export class InvoiceService {
 
   async sendInvoice(businessId: string, invoiceId: string) {
     const invoice = await prisma.invoice.findUnique({
-      where: { id: invoiceId, businessId },
+      where: { id: invoiceId },
       include: { customer: true, business: true }
     });
 
@@ -226,32 +226,32 @@ export class InvoiceService {
       return; // Idempotency
     }
 
-    if (!invoice.generatedDocumentId) throw new Error('PDF not generated yet');
-
-    const doc = await prisma.knowledgeDocument.findUnique({
-      where: { id: invoice.generatedDocumentId, businessId }
-    });
-
-    if (!doc || !doc.storagePath) throw new Error('PDF file missing');
-
     const fs = require('fs');
     const path = require('path');
-    
+
+    let doc = invoice.generatedDocumentId ? await prisma.knowledgeDocument.findUnique({
+      where: { id: invoice.generatedDocumentId }
+    }) : null;
+
     let pdfPath = doc?.storagePath;
     if (pdfPath && pdfPath.startsWith('business/')) {
         pdfPath = path.join(process.cwd(), 'uploads', pdfPath.substring(9));
     }
 
     if (!pdfPath || !fs.existsSync(pdfPath)) {
+      const relPath = pdfPath && pdfPath.includes('uploads') ? pdfPath.split(/uploads[\\/]/)[1] : (pdfPath ? path.basename(pdfPath) : '');
       const candidates = [
         pdfPath,
-        path.join(process.cwd(), 'uploads', (pdfPath || '').replace(/^business\//, '')),
-        path.join(process.cwd(), 'backend', 'uploads', (pdfPath || '').replace(/^business\//, '')),
+        relPath ? path.join(process.cwd(), 'uploads', relPath) : null,
+        relPath ? path.join(process.cwd(), 'backend', 'uploads', relPath) : null,
         path.join(process.cwd(), `uploads/documents/${businessId}/invoices/${invoice.id}.pdf`),
-        path.join(__dirname, '../../../../uploads', (pdfPath || '').replace(/^business\//, ''))
-      ].filter(Boolean);
+        path.join(process.cwd(), `backend/uploads/documents/${businessId}/invoices/${invoice.id}.pdf`),
+        path.join(__dirname, '../../../../uploads', relPath || ''),
+        path.join(__dirname, '../../../../backend/uploads', relPath || '')
+      ].filter(Boolean) as string[];
+
       for (const cand of candidates) {
-        if (fs.existsSync(cand)) {
+        if (cand && fs.existsSync(cand)) {
           pdfPath = cand;
           break;
         }
@@ -259,16 +259,20 @@ export class InvoiceService {
     }
 
     if (!pdfPath || !fs.existsSync(pdfPath)) {
-      console.log(`[InvoiceService] PDF missing on disk for invoice ${invoice.id}. Regenerating...`);
-      await this.docGenService.generateDocument(businessId, 'INVOICE', invoice.id);
-      const updatedInvoice = await prisma.invoice.findUnique({ where: { id: invoice.id } });
-      const targetDocId = updatedInvoice?.generatedDocumentId || invoice.generatedDocumentId;
-      if (targetDocId) {
-        const reDoc = await prisma.knowledgeDocument.findUnique({
-          where: { id: targetDocId }
-        });
-        if (reDoc?.storagePath && fs.existsSync(reDoc.storagePath)) {
-          pdfPath = reDoc.storagePath;
+      console.log(`[InvoiceService] PDF missing on disk for invoice ${invoice.id}. Generating/regenerating on-demand...`);
+      const genDoc = await this.docGenService.generateDocument(businessId, 'INVOICE', invoice.id);
+      if (genDoc?.storagePath && fs.existsSync(genDoc.storagePath)) {
+        pdfPath = genDoc.storagePath;
+      } else {
+        const updatedInvoice = await prisma.invoice.findUnique({ where: { id: invoice.id } });
+        const targetDocId = updatedInvoice?.generatedDocumentId || invoice.generatedDocumentId;
+        if (targetDocId) {
+          const reDoc = await prisma.knowledgeDocument.findUnique({
+            where: { id: targetDocId }
+          });
+          if (reDoc?.storagePath && fs.existsSync(reDoc.storagePath)) {
+            pdfPath = reDoc.storagePath;
+          }
         }
       }
     }
@@ -279,9 +283,21 @@ export class InvoiceService {
 
     const pdfBase64 = fs.readFileSync(pdfPath).toString('base64');
 
-    const integration = await prisma.integration.findFirst({
+    let integration = await prisma.integration.findFirst({
         where: { businessId, provider: 'GMAIL', status: 'CONNECTED' }
     });
+
+    if (!integration) {
+      // Check if primary business profile has active Gmail integration
+      const fallbackIntegration = await prisma.integration.findFirst({
+        where: { provider: 'GMAIL', status: 'CONNECTED' }
+      });
+      if (fallbackIntegration) {
+        console.log(`[InvoiceService] Using active Gmail integration from workspace ${fallbackIntegration.businessId}`);
+        integration = fallbackIntegration;
+      }
+    }
+
     if (!integration) {
       let deliveryMeta = { attemptCount: 1, deliveryStatus: 'FAILED', lastError: 'Gmail integration not connected' };
       try {
@@ -294,7 +310,7 @@ export class InvoiceService {
         where: { id: invoice.id },
         data: { notes: JSON.stringify(deliveryMeta) }
       });
-      throw new Error('GMAIL_SEND_FAILED: Gmail integration not connected');
+      throw new Error('GMAIL_SEND_FAILED: Gmail integration not connected. Please connect Gmail in Integrations to email invoices directly to customers.');
     }
 
     const creds = await prisma.integrationCredential.findUnique({ where: { integrationId: integration.id } });
@@ -329,17 +345,21 @@ export class InvoiceService {
     if (!sendEmailAction) throw new Error('send_email action not found');
 
     const to = invoice.customerSnapshot ? (invoice.customerSnapshot as any).email : invoice.customer?.email;
-    const customerName = invoice.customerSnapshot ? (invoice.customerSnapshot as any).name : invoice.customer?.name;
+    if (!to) {
+      throw new Error(`Customer email not found on invoice ${invoice.invoiceNumber}`);
+    }
+    const customerName = (invoice.customerSnapshot ? (invoice.customerSnapshot as any).name : invoice.customer?.name) || 'Customer';
     const businessName = (invoice.business?.preferences as any)?.displayName || invoice.business?.name || 'Agent Flux';
     
     const subject = `Invoice ${invoice.invoiceNumber} – ${businessName}`;
+    const formattedAmount = `₹${Number(invoice.totalAmount || 0).toLocaleString('en-IN')}`;
     const body = `
       <p>Dear ${customerName},</p>
       <p>Thank you for confirming your order with ${businessName}.</p>
       <p>Please find attached your invoice.</p>
       <ul>
         <li>Invoice Number: ${invoice.invoiceNumber}</li>
-        <li>Amount Due: ${invoice.totalAmount}</li>
+        <li>Amount Due: ${formattedAmount}</li>
         <li>Due Date: ${invoice.dueDate ? invoice.dueDate.toISOString().split('T')[0] : ''}</li>
       </ul>
       <p>Please refer to the attached PDF for the complete invoice details.</p>

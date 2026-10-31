@@ -159,13 +159,15 @@ export default function OrderList() {
   const handleGenerateInvoice = async (orderId: string, orderNumber: string) => {
     setActionLoading(prev => ({ ...prev, [orderId]: true }));
     try {
-      await apiCall(`/businesses/${business.id}/orders/${orderId}/generate-invoice`, {
+      const res = await apiCall(`/businesses/${business.id}/orders/${orderId}/generate-invoice`, {
         method: 'POST'
       });
       addToast({
-        type: 'success',
-        title: 'Invoice Dispatched',
-        message: `Invoice generated for Order ${orderNumber} and queued for dispatch.`
+        type: res?.emailed ? 'success' : 'info',
+        title: res?.emailed ? 'Invoice Emailed' : 'Invoice Generated',
+        message: res?.message || (res?.emailed 
+          ? `Invoice generated and emailed to customer for Order ${orderNumber}.`
+          : `Invoice generated for Order ${orderNumber}.`)
       });
       await loadOrders();
     } catch (e: any) {
