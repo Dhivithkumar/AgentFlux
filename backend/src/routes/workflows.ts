@@ -93,7 +93,10 @@ Output strictly valid JSON with this exact schema (no markdown, no backticks, no
 }`;
 
     try {
-      const aiRes = await aiManager.generateText({ prompt: systemPrompt });
+      const timeoutPromise = new Promise<{ text: string }>((_, reject) =>
+        setTimeout(() => reject(new Error('AI workflow synthesis timed out after 6000ms')), 6000)
+      );
+      const aiRes = await Promise.race([aiManager.generateText({ prompt: systemPrompt }), timeoutPromise]);
       const rawText = aiRes.text?.trim() || '';
       const cleanJson = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
       const parsed = JSON.parse(cleanJson);
@@ -101,8 +104,8 @@ Output strictly valid JSON with this exact schema (no markdown, no backticks, no
       if (parsed && parsed.name && Array.isArray(parsed.nodes) && parsed.nodes.length > 0) {
         generated = parsed;
       }
-    } catch (aiErr) {
-      console.warn('[WorkflowGenerate] AI generation failed or returned invalid JSON. Falling back to dynamic heuristic generation:', aiErr);
+    } catch (aiErr: any) {
+      console.warn('[WorkflowGenerate] AI synthesis timed out or failed. Instant heuristic generation active:', aiErr?.message || aiErr);
     }
 
     // Dynamic Heuristic Fallback if AI was unavailable

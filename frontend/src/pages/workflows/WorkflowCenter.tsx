@@ -35,6 +35,7 @@ export default function WorkflowCenter() {
   const [createMode, setCreateMode] = useState<'SELECT' | 'AI'>('SELECT');
   const [prompt, setPrompt] = useState('');
   const [generating, setGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState('');
 
   // Deletion state
   const [workflowToDelete, setWorkflowToDelete] = useState<any>(null);
@@ -66,18 +67,27 @@ export default function WorkflowCenter() {
   const handleGenerateWorkflow = async () => {
     if (!prompt.trim()) return;
     setGenerating(true);
+    setGenerateError('');
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 12000);
+      
       const res = await apiCall('/workflows/generate', {
         method: 'POST',
-        body: JSON.stringify({ businessId: business.id, prompt })
+        body: JSON.stringify({ businessId: business.id, prompt }),
+        signal: controller.signal
       });
+      clearTimeout(timeoutId);
+
       if (res.data?.workflowId) {
         setShowCreateModal(false);
         navigate(`/dashboard/workflows/${res.data.workflowId}`);
+      } else {
+        throw new Error('Workflow creation did not return a valid workflowId.');
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
-      alert('Failed to generate workflow');
+      setGenerateError(e.name === 'AbortError' ? 'Generation timed out. Please try again.' : (e.message || 'Failed to generate workflow'));
     } finally {
       setGenerating(false);
     }
@@ -309,6 +319,13 @@ export default function WorkflowCenter() {
                     <div className="mt-3 p-3 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs flex items-center gap-2 animate-pulse">
                       <Sparkles size={16} className="text-indigo-600 animate-spin" />
                       <span>Synthesizing DAG nodes, connectors, and execution steps...</span>
+                    </div>
+                  )}
+
+                  {generateError && (
+                    <div className="mt-3 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-2">
+                      <AlertTriangle size={16} className="text-rose-500 shrink-0" />
+                      <span>{generateError}</span>
                     </div>
                   )}
 

@@ -91,12 +91,44 @@ app.use('/api/businesses/:businessId/finance', financeRouter);
 app.use('/api/businesses/:businessId', paymentsRouter); // mounts /invoices/:invoiceId/payments and /payments/:paymentId/confirm
 app.use('/api/webhooks/payments', paymentWebhooksRouter);
 
+app.get('/', (req, res) => {
+  res.json({ name: 'Agent Flux API', status: 'ok', version: '2.0.0' });
+});
+
+app.get('/api', (req, res) => {
+  res.json({ name: 'Agent Flux API', status: 'ok', version: '2.0.0' });
+});
+
 app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' });
+});
+
+// Catch-all 404 handler - always return JSON, never HTML
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    error: {
+      code: 'NOT_FOUND',
+      message: `Cannot ${req.method} ${req.originalUrl}`
+    }
+  });
+});
+
+// Global error handler - always return JSON, never HTML
+app.use((err: any, req: any, res: any, next: any) => {
+  const status = err.status || err.statusCode || 500;
+  console.error(`[API Error] ${req.method} ${req.url} [${status}]:`, err.message || err);
+  res.status(status).json({
+    success: false,
+    error: {
+      code: err.code || 'SERVER_ERROR',
+      message: err.message || 'Internal server error'
+    }
+  });
 });
 
 app.listen(port as number, '0.0.0.0', () => {

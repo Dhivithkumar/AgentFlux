@@ -56,7 +56,10 @@ export class AIProviderManager {
       const startTime = Date.now();
       try {
         attempts++;
-        const result = await executeFn(this.primary);
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Gemini request timed out after ' + AIConfiguration.gemini.timeout + 'ms')), AIConfiguration.gemini.timeout)
+        );
+        const result = await Promise.race([executeFn(this.primary), timeoutPromise]);
         
         console.log(`AI Telemetry | provider=GEMINI | model=${primaryModel} | operation=${operation} | status=SUCCESS | latency=${Date.now() - startTime}ms | retryCount=${attempts - 1} | fallbackUsed=false`);
         return result;
@@ -79,12 +82,15 @@ export class AIProviderManager {
         console.log(`AI Telemetry | provider=GEMINI | model=${primaryModel} | operation=${operation} | status=FAILED | errorCode=${isRetryable ? 'RETRY_EXHAUSTED' : 'NON_RETRYABLE_ERROR'} | latency=${Date.now() - startTime}ms | message=${errorMsg}`);
         
         if (fallbackAllowed && this.fallback) {
-          console.warn('Gemini generation failed permanently or non-retryable. Falling back to Groq API...');
+          console.warn('Gemini generation failed or timed out. Falling back to Groq API...');
           const fallbackStartTime = Date.now();
           const fallbackModel = AIConfiguration.groq.fallbackModel;
           
           try {
-            const fallbackResult = await executeFn(this.fallback);
+            const fallbackTimeoutPromise = new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error('Groq fallback timed out after 6000ms')), 6000)
+            );
+            const fallbackResult = await Promise.race([executeFn(this.fallback), fallbackTimeoutPromise]);
             console.log(`AI Telemetry | provider=GROQ | model=${fallbackModel} | operation=${operation} | status=SUCCESS | latency=${Date.now() - fallbackStartTime}ms | fallbackUsed=true`);
             return fallbackResult;
           } catch (fallbackError: any) {

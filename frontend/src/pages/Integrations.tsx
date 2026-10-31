@@ -92,7 +92,21 @@ const ALL_CONNECTORS = [
   { id: 'HUGGINGFACE', name: 'Hugging Face', category: 'AI & Machine Learning', description: 'Machine learning models and datasets.', iconUrl: getFavicon('huggingface.co') }
 ];
 
-const API_KEY_CONNECTORS = ['WHATSAPP', 'RAZORPAY', 'STRIPE', 'NOTION', 'TRELLO'];
+const API_KEY_CONNECTORS = [
+  'GMAIL',
+  'WHATSAPP',
+  'RAZORPAY',
+  'STRIPE',
+  'NOTION',
+  'TRELLO',
+  'SLACK',
+  'GITHUB',
+  'AIRTABLE',
+  'OPENAI',
+  'GEMINI',
+  'GROQ',
+  'HUBSPOT'
+];
 
 const ConnectorImage = ({ src, alt }: { src?: string, alt: string }) => {
   const [error, setError] = useState(false);
@@ -187,8 +201,15 @@ export function Integrations() {
     try {
       let credentials: any = {};
       let metadata: any = {};
+      let accountEmail = undefined;
+      let displayName = undefined;
 
-      if (modalConnector.id === 'WHATSAPP') {
+      if (modalConnector.id === 'GMAIL') {
+        credentials.appPassword = formValues.appPassword;
+        credentials.accessToken = formValues.appPassword;
+        accountEmail = formValues.email;
+        displayName = formValues.email;
+      } else if (modalConnector.id === 'WHATSAPP') {
         credentials.accessToken = formValues.accessToken;
         metadata.phoneNumberId = formValues.phoneNumberId;
       } else if (modalConnector.id === 'RAZORPAY') {
@@ -202,6 +223,20 @@ export function Integrations() {
       } else if (modalConnector.id === 'TRELLO') {
         credentials.apiKey = formValues.apiKey;
         credentials.apiToken = formValues.apiToken;
+      } else if (modalConnector.id === 'SLACK') {
+        credentials.token = formValues.token;
+      } else if (modalConnector.id === 'GITHUB') {
+        credentials.token = formValues.token;
+      } else if (modalConnector.id === 'AIRTABLE') {
+        credentials.apiKey = formValues.apiKey;
+      } else if (modalConnector.id === 'OPENAI') {
+        credentials.apiKey = formValues.apiKey;
+      } else if (modalConnector.id === 'GEMINI') {
+        credentials.apiKey = formValues.apiKey;
+      } else if (modalConnector.id === 'GROQ') {
+        credentials.apiKey = formValues.apiKey;
+      } else if (modalConnector.id === 'HUBSPOT') {
+        credentials.token = formValues.token;
       }
 
       await apiCall('/integrations/connect-credentials', {
@@ -210,6 +245,8 @@ export function Integrations() {
           businessId: business?.id,
           provider: modalConnector.id,
           credentials,
+          accountEmail,
+          displayName,
           metadata
         })
       });
@@ -409,6 +446,56 @@ export function Integrations() {
                 </div>
               )}
 
+              {modalConnector.id === 'GMAIL' && (
+                <>
+                  <div className="p-3.5 bg-blue-50 border border-blue-200 rounded-2xl flex flex-col gap-2">
+                    <span className="text-xs font-bold text-blue-900">Direct Connect with Google App Password (Free &amp; Instant)</span>
+                    <p className="text-[11px] text-blue-700 leading-relaxed">
+                      Connect your Gmail instantly without needing Google Cloud OAuth verification. Generate a 16-character App Password from: <strong className="font-semibold">Google Account &gt; Security &gt; 2-Step Verification &gt; App Passwords</strong>.
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Gmail Address</label>
+                    <input 
+                      required
+                      type="email"
+                      placeholder="yourbusiness@gmail.com"
+                      value={formValues.email || ''}
+                      onChange={e => setFormValues({ ...formValues, email: e.target.value })}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Google App Password (16 characters)</label>
+                    <input 
+                      required
+                      type="password"
+                      placeholder="abcd efgh ijkl mnop"
+                      value={formValues.appPassword || ''}
+                      onChange={e => setFormValues({ ...formValues, appPassword: e.target.value })}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all"
+                    />
+                  </div>
+                  <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                    <span className="text-[11px] text-slate-400">Prefer Google OAuth?</span>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          const res = await apiCall(`/integrations/GMAIL/connect?businessId=${business?.id}`);
+                          if (res.data?.url) window.location.href = res.data.url;
+                        } catch (err: any) {
+                          setModalError(err.message || 'OAuth init failed');
+                        }
+                      }}
+                      className="text-xs font-semibold text-blue-600 hover:text-blue-700 flex items-center gap-1 cursor-pointer"
+                    >
+                      Authorize via Google OAuth <ExternalLink size={12} />
+                    </button>
+                  </div>
+                </>
+              )}
+
               {modalConnector.id === 'WHATSAPP' && (
                 <>
                   <div>
@@ -535,6 +622,80 @@ export function Integrations() {
                     />
                   </div>
                 </>
+              )}
+
+              {modalConnector.id === 'SLACK' && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Slack Bot User OAuth Token</label>
+                  <input 
+                    required
+                    type="password"
+                    placeholder="xoxb-..."
+                    value={formValues.token || ''}
+                    onChange={e => setFormValues({ ...formValues, token: e.target.value })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all"
+                  />
+                  <p className="text-[11px] text-slate-400 mt-1">From api.slack.com/apps &gt; OAuth &amp; Permissions &gt; Bot User OAuth Token.</p>
+                </div>
+              )}
+
+              {modalConnector.id === 'GITHUB' && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Personal Access Token</label>
+                  <input 
+                    required
+                    type="password"
+                    placeholder="ghp_... or github_pat_..."
+                    value={formValues.token || ''}
+                    onChange={e => setFormValues({ ...formValues, token: e.target.value })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all"
+                  />
+                  <p className="text-[11px] text-slate-400 mt-1">From GitHub &gt; Settings &gt; Developer settings &gt; Personal access tokens.</p>
+                </div>
+              )}
+
+              {modalConnector.id === 'AIRTABLE' && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Personal Access Token</label>
+                  <input 
+                    required
+                    type="password"
+                    placeholder="pat..."
+                    value={formValues.apiKey || ''}
+                    onChange={e => setFormValues({ ...formValues, apiKey: e.target.value })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all"
+                  />
+                  <p className="text-[11px] text-slate-400 mt-1">From airtable.com/create/tokens.</p>
+                </div>
+              )}
+
+              {(modalConnector.id === 'OPENAI' || modalConnector.id === 'GEMINI' || modalConnector.id === 'GROQ') && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">{modalConnector.name} API Key</label>
+                  <input 
+                    required
+                    type="password"
+                    placeholder={`Enter your ${modalConnector.name} API Key`}
+                    value={formValues.apiKey || ''}
+                    onChange={e => setFormValues({ ...formValues, apiKey: e.target.value })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all"
+                  />
+                </div>
+              )}
+
+              {modalConnector.id === 'HUBSPOT' && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Private App Access Token</label>
+                  <input 
+                    required
+                    type="password"
+                    placeholder="pat-..."
+                    value={formValues.token || ''}
+                    onChange={e => setFormValues({ ...formValues, token: e.target.value })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all"
+                  />
+                  <p className="text-[11px] text-slate-400 mt-1">From HubSpot Settings &gt; Integrations &gt; Private Apps.</p>
+                </div>
               )}
 
               <div className="pt-4 flex gap-3">

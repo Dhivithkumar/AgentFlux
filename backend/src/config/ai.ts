@@ -1,16 +1,16 @@
 export const AIConfiguration = {
   gemini: {
     apiKey: process.env.GEMINI_API_KEY || '',
-    generationModel: process.env.GEMINI_MODEL || 'gemini-3.7-flash',
+    generationModel: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
     embeddingModel: process.env.GEMINI_EMBEDDING_MODEL || 'gemini-embedding-001',
     embeddingDimensions: parseInt(process.env.GEMINI_EMBEDDING_DIMENSIONS || '3072', 10),
-    timeout: 30000,
-    maxRetries: 3,
+    timeout: 4000,
+    maxRetries: 1,
     temperature: 0.2
   },
   groq: {
     apiKey: process.env.GROQ_API_KEY || '',
-    fallbackModel: process.env.GROQ_FALLBACK_MODEL || 'openai/gpt-oss-120b',
+    fallbackModel: process.env.GROQ_FALLBACK_MODEL || 'openai/gpt-oss-20b',
     enabled: !!process.env.GROQ_API_KEY
   }
 };

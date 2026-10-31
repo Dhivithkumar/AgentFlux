@@ -1,4 +1,4 @@
-import { ConnectorDefinition, ConnectorProvider } from './types';
+import { ConnectorDefinition, ConnectorProvider, OAuthTokenResult, ConnectorAccountInfo } from './types';
 import { GoogleConnectorProvider } from './providers/google';
 import { WhatsAppConnectorProvider } from './providers/whatsapp';
 import { RazorpayConnectorProvider } from './providers/razorpay';
@@ -19,7 +19,7 @@ import { trelloActions } from './actions/trello';
 export const CONNECTORS: ConnectorDefinition[] = [
   // COMMUNICATION
   { id: 'GMAIL', name: 'Gmail', category: 'COMMUNICATION', description: 'Business email automation', logo: 'https://upload.wikimedia.org/wikipedia/commons/7/7e/Gmail_icon_%282020%29.svg', defaultScopes: ['https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile', 'https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/gmail.modify'], status: 'available', capabilities: ['EMAIL.READ', 'EMAIL.SEARCH', 'EMAIL.SEND', 'EMAIL.REPLY'], actions: gmailActions, triggers: gmailTriggers },
-  { id: 'SLACK', name: 'Slack', category: 'COMMUNICATION', description: 'Team messaging and notifications', logo: 'https://upload.wikimedia.org/wikipedia/commons/d/d5/Slack_icon_2019.svg', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
+  { id: 'SLACK', name: 'Slack', category: 'COMMUNICATION', description: 'Team messaging and notifications', logo: 'https://upload.wikimedia.org/wikipedia/commons/d/d5/Slack_icon_2019.svg', defaultScopes: [], status: 'available', capabilities: ['slack.sendMessage'], actions: [], triggers: [] },
   { id: 'MS_TEAMS', name: 'Microsoft Teams', category: 'COMMUNICATION', description: 'Enterprise communication', logo: 'https://upload.wikimedia.org/wikipedia/commons/c/c9/Microsoft_Office_Teams_%282018%E2%80%93present%29.svg', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
   { id: 'OUTLOOK', name: 'Outlook', category: 'COMMUNICATION', description: 'Microsoft email', logo: 'https://upload.wikimedia.org/wikipedia/commons/d/df/Microsoft_Office_Outlook_%282018%E2%80%93present%29.svg', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
   { id: 'WHATSAPP', name: 'WhatsApp Business', category: 'COMMUNICATION', description: 'Customer messaging via Meta Cloud API', logo: 'https://upload.wikimedia.org/wikipedia/commons/6/6b/WhatsApp.svg', defaultScopes: [], status: 'available', capabilities: ['whatsapp.sendMessage', 'whatsapp.sendTemplate'], actions: whatsappActions, triggers: whatsappTriggers },
@@ -38,7 +38,7 @@ export const CONNECTORS: ConnectorDefinition[] = [
   { id: 'GOOGLE_FORMS', name: 'Google Forms', category: 'GOOGLE WORKSPACE', description: 'Surveys and forms', logo: 'https://upload.wikimedia.org/wikipedia/commons/5/5b/Google_Forms_2020_Logo.svg', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
 
   // CRM
-  { id: 'HUBSPOT', name: 'HubSpot', category: 'CRM', description: 'Inbound marketing and sales', logo: 'https://upload.wikimedia.org/wikipedia/en/3/3f/HubSpot_Logo.svg', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
+  { id: 'HUBSPOT', name: 'HubSpot', category: 'CRM', description: 'Inbound marketing and sales', logo: 'https://upload.wikimedia.org/wikipedia/en/3/3f/HubSpot_Logo.svg', defaultScopes: [], status: 'available', capabilities: ['hubspot.createContact', 'hubspot.createDeal'], actions: [], triggers: [] },
   { id: 'SALESFORCE', name: 'Salesforce', category: 'CRM', description: 'Customer relationship management', logo: 'https://upload.wikimedia.org/wikipedia/commons/f/f9/Salesforce.com_logo.svg', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
   { id: 'ZOHO_CRM', name: 'Zoho CRM', category: 'CRM', description: 'Sales pipeline tracking', logo: 'https://upload.wikimedia.org/wikipedia/commons/e/ec/Zoho_Logo.svg', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
   { id: 'PIPEDRIVE', name: 'Pipedrive', category: 'CRM', description: 'Sales CRM', logo: 'https://upload.wikimedia.org/wikipedia/en/0/0f/Pipedrive_logo.svg', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
@@ -55,10 +55,10 @@ export const CONNECTORS: ConnectorDefinition[] = [
   // STORAGE / DATA
   { id: 'DROPBOX', name: 'Dropbox', category: 'STORAGE / DATA', description: 'Cloud file storage', logo: 'https://upload.wikimedia.org/wikipedia/commons/c/cb/Dropbox_logo_2017.svg', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
   { id: 'ONEDRIVE', name: 'OneDrive', category: 'STORAGE / DATA', description: 'Microsoft storage', logo: 'https://upload.wikimedia.org/wikipedia/commons/3/3c/Microsoft_Office_OneDrive_%282018%E2%80%93present%29.svg', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
-  { id: 'AIRTABLE', name: 'Airtable', category: 'STORAGE / DATA', description: 'Spreadsheet database', logo: 'https://upload.wikimedia.org/wikipedia/commons/4/4b/Airtable_Logo.svg', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
+  { id: 'AIRTABLE', name: 'Airtable', category: 'STORAGE / DATA', description: 'Spreadsheet database', logo: 'https://upload.wikimedia.org/wikipedia/commons/4/4b/Airtable_Logo.svg', defaultScopes: [], status: 'available', capabilities: ['airtable.createRecord', 'airtable.listRecords'], actions: [], triggers: [] },
 
   // DEVELOPMENT
-  { id: 'GITHUB', name: 'GitHub', category: 'DEVELOPMENT', description: 'Code repositories', logo: 'https://upload.wikimedia.org/wikipedia/commons/9/91/Octicons-mark-github.svg', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
+  { id: 'GITHUB', name: 'GitHub', category: 'DEVELOPMENT', description: 'Code repositories and issue tracking', logo: 'https://upload.wikimedia.org/wikipedia/commons/9/91/Octicons-mark-github.svg', defaultScopes: [], status: 'available', capabilities: ['github.createIssue', 'github.createComment'], actions: [], triggers: [] },
   { id: 'GITLAB', name: 'GitLab', category: 'DEVELOPMENT', description: 'DevOps platform', logo: 'https://upload.wikimedia.org/wikipedia/commons/e/e1/GitLab_logo.svg', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
   { id: 'JIRA', name: 'Jira', category: 'DEVELOPMENT', description: 'Issue tracking', logo: 'https://upload.wikimedia.org/wikipedia/commons/8/8a/Jira_Logo.svg', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
   { id: 'BITBUCKET', name: 'Bitbucket', category: 'DEVELOPMENT', description: 'Git repositories', logo: 'https://upload.wikimedia.org/wikipedia/commons/0/0e/Bitbucket-blue-logomark-only.svg', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
@@ -71,9 +71,9 @@ export const CONNECTORS: ConnectorDefinition[] = [
   { id: 'BREVO', name: 'Brevo', category: 'MARKETING', description: 'Email and SMS marketing', logo: 'https://upload.wikimedia.org/wikipedia/commons/4/4c/Brevo_Logo.png', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
 
   // AI
-  { id: 'OPENAI', name: 'OpenAI', category: 'AI', description: 'GPT models', logo: 'https://upload.wikimedia.org/wikipedia/commons/0/04/ChatGPT_logo.svg', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
-  { id: 'GEMINI', name: 'Gemini', category: 'AI', description: 'Google AI models', logo: 'https://upload.wikimedia.org/wikipedia/commons/8/8a/Google_Gemini_logo.svg', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
-  { id: 'GROQ', name: 'Groq', category: 'AI', description: 'Fast inference', logo: 'https://upload.wikimedia.org/wikipedia/commons/6/6b/Groq_logo.png', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] },
+  { id: 'OPENAI', name: 'OpenAI', category: 'AI', description: 'GPT models and reasoning API', logo: 'https://upload.wikimedia.org/wikipedia/commons/0/04/ChatGPT_logo.svg', defaultScopes: [], status: 'available', capabilities: ['openai.chatCompletion'], actions: [], triggers: [] },
+  { id: 'GEMINI', name: 'Gemini', category: 'AI', description: 'Google AI multimodal models', logo: 'https://upload.wikimedia.org/wikipedia/commons/8/8a/Google_Gemini_logo.svg', defaultScopes: [], status: 'available', capabilities: ['gemini.generateContent'], actions: [], triggers: [] },
+  { id: 'GROQ', name: 'Groq', category: 'AI', description: 'Fast LPU inference engine', logo: 'https://upload.wikimedia.org/wikipedia/commons/6/6b/Groq_logo.png', defaultScopes: [], status: 'available', capabilities: ['groq.chatCompletion'], actions: [], triggers: [] },
   { id: 'HUGGINGFACE', name: 'Hugging Face', category: 'AI', description: 'Open source models', logo: 'https://upload.wikimedia.org/wikipedia/commons/e/e6/Hugging_Face_logo.svg', defaultScopes: [], status: 'coming_soon', actions: [], triggers: [] }
 ];
 
@@ -90,6 +90,37 @@ export function getConnectorDefinition(id: string): ConnectorDefinition {
     throw new Error(`Unknown connector ID: ${id}`);
   }
   return def;
+}
+
+export class GenericApiKeyProvider implements ConnectorProvider {
+  providerId: string;
+  constructor(providerId: string) {
+    this.providerId = providerId;
+  }
+  getAuthorizationUrl(): string {
+    throw new Error(`Direct API key/token required for ${this.providerId}. Connect via credentials modal.`);
+  }
+  async handleOAuthCallback(): Promise<OAuthTokenResult> {
+    throw new Error(`OAuth callback not supported for ${this.providerId}.`);
+  }
+  async refreshAccessToken(token: string): Promise<OAuthTokenResult> {
+    return { accessToken: token };
+  }
+  async getAccountInfo(accessToken: string): Promise<ConnectorAccountInfo> {
+    return {
+      accountId: `${this.providerId.toLowerCase()}_${Date.now()}`,
+      accountEmail: null,
+      displayName: `${this.providerId} Integration`,
+      metadata: {}
+    };
+  }
+  async verifyConnection(token: string): Promise<boolean> {
+    return !!token && token.trim().length > 0;
+  }
+  async disconnect(): Promise<void> {}
+  getCapabilities(): string[] {
+    return [`${this.providerId.toLowerCase()}.action`];
+  }
 }
 
 export function getConnectorProvider(id: string): ConnectorProvider {
@@ -131,6 +162,12 @@ export function getConnectorProvider(id: string): ConnectorProvider {
   }
   if (id === 'TRELLO') {
     providerInstances[id] = new TrelloConnectorProvider();
+    return providerInstances[id];
+  }
+
+  // Generic token / API key providers
+  if (['SLACK', 'GITHUB', 'AIRTABLE', 'OPENAI', 'GEMINI', 'GROQ', 'HUBSPOT'].includes(id)) {
+    providerInstances[id] = new GenericApiKeyProvider(id);
     return providerInstances[id];
   }
 

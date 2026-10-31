@@ -403,15 +403,22 @@ router.post('/connect-credentials', authenticate, async (req: Request, res: Resp
     const def = getConnectorDefinition(provider);
 
     // Primary token / key
-    const primaryKey = credentials.apiKey || credentials.token || credentials.secretKey || credentials.keyId || credentials.accessToken;
-    const secondaryKey = credentials.apiSecret || credentials.keySecret || credentials.publishableKey || credentials.apiToken;
+    const primaryKey = credentials.apiKey || credentials.token || credentials.secretKey || credentials.keyId || credentials.accessToken || credentials.appPassword;
+    const secondaryKey = credentials.apiSecret || credentials.keySecret || credentials.publishableKey || credentials.apiToken || credentials.refreshToken;
 
     if (!primaryKey) {
       return res.status(400).json({ success: false, error: 'Primary API key or token is required' });
     }
 
-    // Verify connection if supported
-    const isValid = await providerImpl.verifyConnection(primaryKey).catch(() => true);
+    // Verify connection if supported (graceful fallback)
+    let isValid = true;
+    try {
+      if (typeof providerImpl.verifyConnection === 'function') {
+        isValid = await providerImpl.verifyConnection(primaryKey).catch(() => true);
+      }
+    } catch {
+      isValid = true;
+    }
     if (!isValid) {
       return res.status(400).json({ success: false, error: `Invalid ${provider} credentials. Please verify your keys.` });
     }
